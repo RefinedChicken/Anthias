@@ -1638,6 +1638,8 @@ def review_cta_snooze(request: HttpRequest) -> HttpResponse:
 @authorized
 @require_http_methods(['GET'])
 def settings_view(request: HttpRequest) -> HttpResponse:
+    from anthias_server.api.models import AnthiasAPIToken
+    from anthias_server.lib.auth import _persisted_operator
     from anthias_server.lib.integrations.registry import list_provider_meta
 
     context = page_context.device_settings()
@@ -1645,6 +1647,18 @@ def settings_view(request: HttpRequest) -> HttpResponse:
     # Data-driven so a newly registered provider appears in Settings with
     # no template edit.
     context['import_providers'] = list_provider_meta()
+
+    operator = _persisted_operator()
+    context['has_operator_account'] = operator is not None
+    context['api_tokens'] = (
+        AnthiasAPIToken.objects.filter(user=operator)
+        if operator is not None
+        else AnthiasAPIToken.objects.none()
+    )
+    # Popped (not just read) so the raw value renders exactly once —
+    # issue_api_token() never persists it, and a page refresh or a
+    # second tab must not be able to see it again.
+    context['new_api_token'] = request.session.pop('new_api_token', None)
     return template(request, 'settings.html', context)
 
 
@@ -1859,6 +1873,56 @@ def settings_display_power(request: HttpRequest, state: str) -> HttpResponse:
         return redirect(reverse('anthias_app:settings'))
     ok, msg = diagnostics.set_display_power(on=(state == 'on'))
     (messages.success if ok else messages.error)(request, msg)
+    return redirect(reverse('anthias_app:settings'))
+
+
+@authorized
+@require_http_methods(['POST'])
+def api_tokens_create(request: HttpRequest) -> HttpResponse:
+    """Issue a new ``AnthiasAPIToken`` for the operator account.
+
+    Tokens are scoped to a real ``User`` row (see ``AnthiasAPIToken.user``),
+    so an operator account must exist first — same precondition the
+    settings page's own auth section surfaces via
+    ``has_saved_basic_auth``.
+    """
+    from anthias_server.lib.auth import _persisted_operator, issue_api_token
+
+    name = (request.POST.get('name') or '').strip()
+    operator = _persisted_operator()
+    if operator is None:
+        messages.error(
+            request,
+            'Create an operator account under Authentication before '
+            'issuing API tokens.',
+        )
+    elif not name:
+        messages.error(request, 'Token name is required.')
+    else:
+        _, raw_token = issue_api_token(operator, name)
+        # One-time reveal: stashed in the session (not a Django
+        # `messages` toast, which is meant for short transient text)
+        # so a page refresh or a second tab never shows it again —
+        # issue_api_token() is the only place the raw value is ever
+        # available; nothing else can recover it after this redirect.
+        request.session['new_api_token'] = {'name': name, 'raw': raw_token}
+        messages.success(request, f'Created API token "{name}".')
+    return redirect(reverse('anthias_app:settings'))
+
+
+@authorized
+@require_http_methods(['POST'])
+def api_tokens_revoke(request: HttpRequest, token_id: int) -> HttpResponse:
+    from anthias_server.api.models import AnthiasAPIToken
+    from anthias_server.lib.auth import _persisted_operator
+
+    operator = _persisted_operator()
+    deleted, _ = AnthiasAPIToken.objects.filter(
+        pk=token_id, user=operator
+    ).delete()
+    (messages.success if deleted else messages.error)(
+        request, 'API token revoked.' if deleted else 'Token not found.'
+    )
     return redirect(reverse('anthias_app:settings'))
 
 

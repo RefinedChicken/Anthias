@@ -175,6 +175,91 @@
     </header>
   </section>
 
+  {# ===== API tokens ===== #}
+  <section class="settings-section mt-4" x-data="{ showNewToken: {{ new_api_token|yesno:'true,false' }} }">
+    <header>
+      <div>
+        <h2>API tokens</h2>
+        <p class="settings-section__lede">Bearer credentials for unattended integrations (e.g. a fleet-management server) — a scoped, revocable alternative to sharing your own login.</p>
+      </div>
+    </header>
+
+    {% if not has_operator_account %}
+    <p class="settings-section__lede">Create an operator account under Authentication above before issuing API tokens.</p>
+    {% else %}
+    <form method="post" action="{% url 'anthias_app:api_tokens_create' %}" class="app-form-grid mb-3">
+      {% csrf_token %}
+      <div class="app-floating">
+        <input type="text" class="app-input" id="api_token_name" name="name" placeholder=" " required>
+        <label for="api_token_name">Token name</label>
+      </div>
+      <button type="submit" class="app-btn app-btn-outline-dark">
+        <i class="ti ti-key"></i><span>Generate token</span>
+      </button>
+    </form>
+
+    {% if api_tokens %}
+    <table class="asset-table">
+      <thead>
+        <tr>
+          <th scope="col">Name</th>
+          <th scope="col">Token</th>
+          <th scope="col">Created</th>
+          <th scope="col">Last used</th>
+          <th scope="col"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for token in api_tokens %}
+        <tr x-data="{ confirming: false }">
+          <td>{{ token.name }}</td>
+          <td><span style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace">{{ token.prefix }}&hellip;</span></td>
+          <td>{{ token.created_at }}</td>
+          <td>{{ token.last_used_at|default:"Never" }}</td>
+          <td>
+            <div x-show="!confirming">
+              <button type="button" class="app-btn app-btn-link" @click="confirming = true">Revoke</button>
+            </div>
+            <form x-show="confirming" x-cloak method="post" action="{% url 'anthias_app:api_tokens_revoke' token.id %}" class="flex items-center gap-2 m-0">
+              {% csrf_token %}
+              <span class="muted-label">Revoke?</span>
+              <button type="submit" class="app-btn app-btn-danger">Yes</button>
+              <button type="button" class="app-btn app-btn-link" @click="confirming = false">Cancel</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="settings-section__lede">No API tokens yet.</p>
+    {% endif %}
+    {% endif %}
+
+    {% if new_api_token %}
+    <div x-show="showNewToken" x-cloak class="modal-overlay" @keydown.escape.window="showNewToken = false" @click.self="showNewToken = false">
+      <div class="modal-card modal-card--sm">
+        <div class="modal-card__header">
+          <h2>Copy your new token now</h2>
+          <button type="button" class="modal-card__close" @click="showNewToken = false" aria-label="Close">
+            <i class="ti ti-x"></i>
+          </button>
+        </div>
+        <div class="modal-card__body">
+          <p>This is the only time "{{ new_api_token.name }}" will be shown. Store it now — it can't be recovered later, only revoked and reissued.</p>
+          <div class="app-floating">
+            <input type="text" class="app-input" id="new_api_token_value" value="{{ new_api_token.raw }}" readonly @focus="$el.select()">
+            <label for="new_api_token_value">Token</label>
+          </div>
+        </div>
+        <div class="modal-card__footer">
+          <button type="button" class="app-btn app-btn-primary" @click="showNewToken = false">Done</button>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </section>
+
   {% comment %}
     Import content: one card per registered provider. The list comes from
     the import-provider registry via the settings view, so a new provider

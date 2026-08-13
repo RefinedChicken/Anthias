@@ -2,17 +2,19 @@
 
 The legacy Auth/NoAuth/BasicAuth class hierarchy has been retired —
 auth is now Django's built-in (session via DRF
-``SessionAuthentication`` + the deprecation-logging
+``SessionAuthentication``, the deprecation-logging
 ``DeprecatedBasicAuthentication`` for back-compat with pre-2826
-headless callers). A UI-managed personal-token path will replace
-Basic in a follow-up. What's covered here:
+headless callers, and ``AnthiasAPITokenAuthentication`` for
+unattended integrations). What's covered here:
 
 * The hash helpers (round-trip, legacy-format detection) — still used
   by the data migration to gate which conf rows can be promoted into
   User.password.
+* ``generate_api_token`` / ``hash_api_token`` / ``issue_api_token`` —
+  token creation, hashing, and storage.
 * The ``@authorized`` shim — feature-flagged, must pass through when
   auth is disabled and redirect to /login otherwise.
-* The Session and Basic paths reaching the JSON API.
+* The Session, Basic, and Bearer-token paths reaching the JSON API.
 * ``apply_auth_settings`` — single source of truth for the settings
   page's auth-update flow on both the HTML and DRF code paths.
 """
@@ -89,6 +91,43 @@ def test_verify_password_empty_stored_returns_false() -> None:
 )
 def test_is_legacy_sha256(value: str, expected: bool) -> None:
     assert _is_legacy_sha256(value) is expected
+
+
+# ---------------------------------------------------------------------------
+# generate_api_token / hash_api_token / issue_api_token
+
+
+def test_generate_api_token_has_prefix_and_is_unique() -> None:
+    token_a = auth.generate_api_token()
+    token_b = auth.generate_api_token()
+    assert token_a.startswith('ant_')
+    assert token_a != token_b
+
+
+def test_hash_api_token_is_deterministic_and_not_reversible() -> None:
+    raw = auth.generate_api_token()
+    digest = auth.hash_api_token(raw)
+    assert digest == auth.hash_api_token(raw)
+    assert digest != raw
+    # SHA-256 hex digest.
+    assert len(digest) == 64
+
+
+@pytest.mark.django_db
+def test_issue_api_token_creates_row_and_returns_raw_once() -> None:
+    from anthias_server.api.models import AnthiasAPIToken
+
+    operator = _make_operator(pwd=_PWD_TOKEN_USER)
+    token_row, raw_token = auth.issue_api_token(operator, 'fleet-server')
+
+    assert raw_token.startswith('ant_')
+    assert token_row.user_id == operator.pk
+    assert token_row.name == 'fleet-server'
+    assert token_row.prefix == raw_token[:12]
+    assert token_row.token_hash == auth.hash_api_token(raw_token)
+    # The raw token itself is never persisted anywhere on the row.
+    assert raw_token not in token_row.token_hash
+    assert AnthiasAPIToken.objects.filter(pk=token_row.pk).exists()
 
 
 def test_module_level_linux_user_constant() -> None:
@@ -770,7 +809,13 @@ def test_basic_auth_header_rejects_wrong_password(
             HTTP_AUTHORIZATION=f'Basic {creds}',
         )
     assert response.status_code == 401
-    assert response.headers.get('WWW-Authenticate', '').startswith('Basic')
+    # DRF's WWW-Authenticate challenge always names the FIRST configured
+    # authenticator (DEFAULT_AUTHENTICATION_CLASSES order), not whichever
+    # one actually rejected the request — see
+    # APIView.get_authenticate_header. AnthiasAPITokenAuthentication is
+    # listed first (the recommended path for new integrations), so every
+    # 401 now advertises "Bearer" regardless of which scheme was tried.
+    assert response.headers.get('WWW-Authenticate', '') == 'Bearer'
 
 
 @pytest.mark.django_db
@@ -868,3 +913,115 @@ def test_auth_disabled_ignores_drf_authenticators(
     # but explicitly NOT 403 (the CSRF rejection we're guarding
     # against). The view dispatches and the auth/CSRF gate is silent.
     assert response.status_code != 403
+
+
+# ---------------------------------------------------------------------------
+# AnthiasAPITokenAuthentication
+
+
+@pytest.mark.django_db
+def test_bearer_token_authenticates_even_when_auth_backend_disabled() -> None:
+    """A deliberately issued token must keep working regardless of the
+    operator's Basic/Session auth_backend toggle — that's the whole
+    point of not inheriting ``_AuthBackendGated`` (see the class
+    docstring). auth_backend is '' by default in tests; do NOT enter
+    ``_enable_auth()`` here."""
+    operator = _make_operator(pwd=_PWD_TOKEN_USER)
+    _, raw_token = auth.issue_api_token(operator, 'fleet-server')
+
+    client = Client()
+    response = client.get(
+        '/api/v2/assets', HTTP_AUTHORIZATION=f'Bearer {raw_token}'
+    )
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.django_db
+def test_bearer_token_authenticates_when_auth_backend_enabled() -> None:
+    operator = _make_operator(pwd=_PWD_TOKEN_USER)
+    _, raw_token = auth.issue_api_token(operator, 'fleet-server')
+
+    client = Client()
+    with _enable_auth():
+        response = client.get(
+            '/api/v2/assets', HTTP_AUTHORIZATION=f'Bearer {raw_token}'
+        )
+    assert response.status_code == 200
+
+
+@pytest.mark.django_db
+def test_bearer_token_rejects_unknown_token() -> None:
+    client = Client()
+    response = client.get(
+        '/api/v2/assets',
+        HTTP_AUTHORIZATION=f'Bearer {auth.generate_api_token()}',
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    'header_value',
+    [
+        'Bearer',  # missing token
+        'Bearer a b',  # extra whitespace/segment
+    ],
+)
+@pytest.mark.django_db
+def test_bearer_token_rejects_malformed_header(header_value: str) -> None:
+    client = Client()
+    response = client.get('/api/v2/assets', HTTP_AUTHORIZATION=header_value)
+    assert response.status_code == 401
+
+
+@pytest.mark.django_db
+def test_bearer_token_rejects_expired_token() -> None:
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from anthias_server.api.models import AnthiasAPIToken
+
+    operator = _make_operator(pwd=_PWD_TOKEN_USER)
+    token_row, raw_token = auth.issue_api_token(operator, 'fleet-server')
+    AnthiasAPIToken.objects.filter(pk=token_row.pk).update(
+        expires_at=timezone.now() - timedelta(seconds=1)
+    )
+
+    client = Client()
+    response = client.get(
+        '/api/v2/assets', HTTP_AUTHORIZATION=f'Bearer {raw_token}'
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.django_db
+def test_bearer_token_revoke_deletes_row_and_rejects_future_requests() -> None:
+    from anthias_server.api.models import AnthiasAPIToken
+
+    operator = _make_operator(pwd=_PWD_TOKEN_USER)
+    token_row, raw_token = auth.issue_api_token(operator, 'fleet-server')
+    token_row.delete()
+
+    client = Client()
+    response = client.get(
+        '/api/v2/assets', HTTP_AUTHORIZATION=f'Bearer {raw_token}'
+    )
+    assert response.status_code == 401
+    assert not AnthiasAPIToken.objects.filter(pk=token_row.pk).exists()
+
+
+@pytest.mark.django_db
+def test_bearer_token_updates_last_used_at() -> None:
+    operator = _make_operator(pwd=_PWD_TOKEN_USER)
+    token_row, raw_token = auth.issue_api_token(operator, 'fleet-server')
+    assert token_row.last_used_at is None
+
+    client = Client()
+    response = client.get(
+        '/api/v2/assets', HTTP_AUTHORIZATION=f'Bearer {raw_token}'
+    )
+    assert response.status_code == 200
+
+    token_row.refresh_from_db()
+    assert token_row.last_used_at is not None

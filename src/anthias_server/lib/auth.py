@@ -2,7 +2,7 @@
 
 The legacy ``Auth`` / ``NoAuth`` / ``BasicAuth`` abstractions have been
 retired in favour of Django's built-in primitives. Anthias now has
-three credential paths, each with a distinct caller and trust model:
+four credential paths, each with a distinct caller and trust model:
 
 1. **Browser session** (operators using the dashboard).
    Driven by ``django.contrib.auth``: the login form posts to
@@ -11,7 +11,17 @@ three credential paths, each with a distinct caller and trust model:
    gates both the HTML views (via :func:`authorized`) and the DRF
    API (via DRF's ``SessionAuthentication``).
 
-2. **HTTP Basic** (legacy headless path, kept for back-compat).
+2. **API bearer token** (unattended integrations — the recommended
+   path for new callers).
+   A UI-managed, per-integration ``AnthiasAPIToken`` row, presented as
+   ``Authorization: Bearer <token>``. Scoped to a single ``User`` (so
+   it inherits that user's permissions), stored only as a salted hash,
+   revocable independently of the operator's own password. This is
+   what a fleet-management server (or any other unattended caller)
+   should use instead of Basic auth against the operator's own
+   credentials.
+
+3. **HTTP Basic** (legacy headless path, kept for back-compat).
    DRF's stock ``BasicAuthentication`` against the same User table,
    wrapped to log a ``DEPRECATED`` warning when Basic auth is used.
    The log is throttled per ``(user, IP, path)`` tuple with a 1-hour
@@ -20,12 +30,10 @@ three credential paths, each with a distinct caller and trust model:
    signal we care about is "this caller is still on Basic", not the
    request rate. Pre-2826 versions of Anthias-CLI and any third-party
    scripts that were written against the old auth keep working
-   unchanged. The bearer-token path that will eventually replace
-   this is tracked as a follow-up — it needs its own UI for create /
-   list / revoke and a multi-token model with hashed storage,
-   neither of which fits in this PR.
+   unchanged, but new integrations should use the bearer-token path
+   above instead.
 
-3. **Viewer ↔ server shared secret** (intra-device, same trust
+4. **Viewer ↔ server shared secret** (intra-device, same trust
    boundary).
    The viewer process can't carry an operator session, but it does
    need to call a small set of internal endpoints (currently just
@@ -45,6 +53,13 @@ This module's surface is:
   hashers, kept so callers don't have to import them on every site
   and so the data migration can sniff for non-Django-format strings
   in ``anthias.conf`` before promoting them into ``User.password``.
+* ``generate_api_token`` / ``hash_api_token`` / ``issue_api_token`` —
+  create and store ``AnthiasAPIToken`` rows. The raw token is only
+  ever available at ``issue_api_token`` call time; everything
+  afterwards works off ``hash_api_token``'s digest.
+* ``AnthiasAPITokenAuthentication`` — ``Authorization: Bearer``
+  against ``AnthiasAPIToken``. Deliberately not gated by
+  ``auth_backend`` (see its class docstring).
 * ``DeprecatedBasicAuthentication`` — DRF's ``BasicAuthentication``
   with a throttled ``logger.warning`` (one line per ``(user, IP,
   path)`` per ``_BASIC_AUTH_LOG_TTL_S``) so production logs surface
@@ -130,6 +145,60 @@ def verify_password(password: str, stored: str) -> bool:
     return bool(check_password(password, stored))
 
 
+# Prefix on every issued token, both to make a leaked value greppable
+# in logs/history and so the UI's "ant_a1b2c3…" display is recognisably
+# an Anthias credential (GitHub/Stripe PAT convention).
+_API_TOKEN_PREFIX = 'ant_'
+# Length of the raw-token slice (including the ``ant_`` prefix) shown
+# in clear in the UI/admin — enough to tell rows apart, short enough
+# that it isn't a meaningful fraction of the secret.
+_API_TOKEN_DISPLAY_PREFIX_LEN = 12
+
+
+def generate_api_token() -> str:
+    """A new random bearer token, e.g. ``ant_<43 url-safe chars>``.
+
+    ``secrets.token_urlsafe(32)`` gives 256 bits of entropy — the same
+    budget GitHub/Stripe use for personal access tokens.
+    """
+    import secrets
+
+    return f'{_API_TOKEN_PREFIX}{secrets.token_urlsafe(32)}'
+
+
+def hash_api_token(raw_token: str) -> str:
+    """SHA-256 hex digest of a raw token, for storage/lookup.
+
+    Unlike passwords, API tokens are already high-entropy random
+    strings, not user-chosen — a slow, salted password hasher (PBKDF2)
+    buys nothing here and would make every authenticated API request
+    pay its cost. A fast digest is the right primitive, same as
+    GitHub/Stripe's own token storage.
+    """
+    import hashlib
+
+    return hashlib.sha256(raw_token.encode()).hexdigest()
+
+
+def issue_api_token(user: User, name: str) -> tuple[Any, str]:
+    """Create and persist a new ``AnthiasAPIToken`` for ``user``.
+
+    Returns ``(token_row, raw_token)`` — the raw value is never stored
+    and this is the only place it's ever available; the caller must
+    show it to the operator immediately, it can't be recovered later.
+    """
+    from anthias_server.api.models import AnthiasAPIToken
+
+    raw_token = generate_api_token()
+    token_row = AnthiasAPIToken.objects.create(
+        user=user,
+        name=name,
+        token_hash=hash_api_token(raw_token),
+        prefix=raw_token[:_API_TOKEN_DISPLAY_PREFIX_LEN],
+    )
+    return token_row, raw_token
+
+
 # Throttle window for the DEPRECATED-Basic-auth log line. The signal
 # we want is "this caller is still on Basic" — knowing it once an
 # hour per (user, IP, path) is enough to chase down stragglers, and
@@ -174,25 +243,39 @@ def _build_drf_auth_classes() -> dict[str, type]:
     ``django_project.settings``). Wrapping the import in a factory
     means viewer ``import lib.auth`` doesn't pull DRF in.
 
-    Returns both:
+    Returns all three:
 
     * ``DeprecatedBasicAuthentication`` — Basic auth + throttled
       deprecation warning.
     * ``GatedSessionAuthentication`` — DRF's stock
       ``SessionAuthentication`` with the ``_AuthBackendGated`` mixin.
+    * ``AnthiasAPITokenAuthentication`` — ``Authorization: Bearer``
+      against ``AnthiasAPIToken``, for unattended integrations (e.g. a
+      fleet-management server calling into this device's API).
 
-    Both inherit ``_AuthBackendGated`` so they short-circuit when
-    ``settings['auth_backend']`` is empty: the documented contract is
-    "auth disabled = the API is fully open", which DRF's authenticators
-    would otherwise violate. Stock ``SessionAuthentication`` enforces
-    CSRF whenever a session cookie is present (403 on unsafe methods
-    without ``X-CSRFToken``); stock ``BasicAuthentication`` returns
-    401 when an ``Authorization: Basic …`` header has wrong creds.
-    Neither is appropriate when auth is turned off.
+    The first two inherit ``_AuthBackendGated`` so they short-circuit
+    when ``settings['auth_backend']`` is empty: the documented contract
+    is "auth disabled = the API is fully open", which DRF's stock
+    authenticators would otherwise violate. Stock ``SessionAuthentication``
+    enforces CSRF whenever a session cookie is present (403 on unsafe
+    methods without ``X-CSRFToken``); stock ``BasicAuthentication``
+    returns 401 when an ``Authorization: Basic …`` header has wrong
+    creds. Neither is appropriate when auth is turned off.
+
+    ``AnthiasAPITokenAuthentication`` deliberately does NOT inherit
+    ``_AuthBackendGated`` — a bearer token is an explicitly issued
+    credential, independent of the operator's own password/session
+    login. Gating it on ``auth_backend`` would silently break every
+    integration holding a still-valid token the moment an operator
+    disabled Basic/Session auth, which is a worse failure mode than
+    "the token keeps working regardless of that toggle."
     """
+    from rest_framework import exceptions
     from rest_framework.authentication import (
+        BaseAuthentication,
         BasicAuthentication,
         SessionAuthentication,
+        get_authorization_header,
     )
 
     class _AuthBackendGated:
@@ -275,14 +358,82 @@ def _build_drf_auth_classes() -> dict[str, type]:
         ``authenticate`` before the CSRF check runs.
         """
 
+    class AnthiasAPITokenAuthentication(BaseAuthentication):
+        """``Authorization: Bearer <token>`` against ``AnthiasAPIToken``.
+
+        The recommended path for unattended integrations (a
+        fleet-management server, a CI job, a monitoring probe) —
+        anything that shouldn't hold the operator's own username and
+        password. See the class docstring on ``_build_drf_auth_classes``
+        for why this class does not gate on ``auth_backend``.
+        """
+
+        keyword = b'bearer'
+
+        def authenticate(self, request):  # type: ignore[no-untyped-def]
+            header = get_authorization_header(request).split()
+            if not header or header[0].lower() != self.keyword:
+                return None
+            if len(header) != 2:
+                raise exceptions.AuthenticationFailed(
+                    'Invalid Authorization header. Expected "Bearer <token>".'
+                )
+            try:
+                raw_token = header[1].decode()
+            except UnicodeDecodeError as exc:
+                raise exceptions.AuthenticationFailed(
+                    'Invalid token header.'
+                ) from exc
+            return self._authenticate_token(raw_token)
+
+        def _authenticate_token(  # type: ignore[no-untyped-def]
+            self, raw_token: str
+        ):
+            from django.utils import timezone
+
+            from anthias_server.api.models import AnthiasAPIToken
+
+            try:
+                token = AnthiasAPIToken.objects.select_related('user').get(
+                    token_hash=hash_api_token(raw_token)
+                )
+            except AnthiasAPIToken.DoesNotExist as exc:
+                raise exceptions.AuthenticationFailed(
+                    'Invalid token.'
+                ) from exc
+            if token.expires_at is not None and token.expires_at <= (
+                timezone.now()
+            ):
+                raise exceptions.AuthenticationFailed('Token expired.')
+            if not token.user.is_active:
+                raise exceptions.AuthenticationFailed(
+                    'User inactive or deleted.'
+                )
+            # Best-effort last-used bookkeeping — an UPDATE on the
+            # single matched row, not a full ``token.save()`` (which
+            # would also rewrite the hash/prefix columns unnecessarily
+            # on every authenticated request).
+            AnthiasAPIToken.objects.filter(pk=token.pk).update(
+                last_used_at=timezone.now()
+            )
+            return (token.user, token)
+
+        def authenticate_header(self, request):  # type: ignore[no-untyped-def]
+            return 'Bearer'
+
     return {
         'DeprecatedBasicAuthentication': DeprecatedBasicAuthentication,
         'GatedSessionAuthentication': GatedSessionAuthentication,
+        'AnthiasAPITokenAuthentication': AnthiasAPITokenAuthentication,
     }
 
 
 _DRF_AUTH_CLASS_NAMES = frozenset(
-    {'DeprecatedBasicAuthentication', 'GatedSessionAuthentication'}
+    {
+        'DeprecatedBasicAuthentication',
+        'GatedSessionAuthentication',
+        'AnthiasAPITokenAuthentication',
+    }
 )
 
 

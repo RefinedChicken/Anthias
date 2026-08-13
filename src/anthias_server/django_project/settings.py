@@ -763,18 +763,27 @@ APP_STORE_ALLOWED_HOST_SUFFIXES = [
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'EXCEPTION_HANDLER': 'anthias_server.api.helpers.custom_exception_handler',
-    # Two auth paths for the JSON API.
+    # Three auth paths for the JSON API.
     #
     # Ordering matters: DRF tries authenticators in sequence and the
     # first one that recognises the request short-circuits the rest.
+    # AnthiasAPITokenAuthentication first — an explicit ``Authorization:
+    # Bearer`` header is the least ambiguous credential and never
+    # collides with the other two schemes' header values. Then
+    # BasicAuthentication, then SessionAuthentication:
     # ``SessionAuthentication.authenticate`` enforces CSRF on unsafe
     # methods whenever a session cookie is present, and a missing
     # ``X-CSRFToken`` raises 403 — which would mask a perfectly valid
     # ``Authorization: Basic …`` header on the same request (some CLI
     # tooling shares a cookie jar with the operator's browser).
-    # Run BasicAuthentication first so an explicit Authorization
-    # header always wins over an incidental session cookie.
     #
+    #   * AnthiasAPITokenAuthentication — ``Authorization: Bearer
+    #     <token>`` against ``AnthiasAPIToken``. The recommended path
+    #     for unattended integrations (e.g. a fleet-management server
+    #     controlling many players) — a scoped, revocable credential
+    #     instead of the operator's own username/password. Not gated
+    #     by ``auth_backend``: see the class docstring in
+    #     ``lib.auth._build_drf_auth_classes`` for why.
     #   * DeprecatedBasicAuthentication — DRF's stock
     #     ``BasicAuthentication`` plus a throttled warning log
     #     (one line per (user, IP, path) per 1-hour TTL) so we can
@@ -789,11 +798,8 @@ REST_FRAMEWORK = {
     #     no-op so the documented "auth disabled = API is fully
     #     open" contract holds even for clients that happen to carry
     #     a session cookie or a malformed Authorization header.
-    #
-    # New integrations should use the bearer-token path coming in a
-    # follow-up PR (UI-managed personal tokens, not
-    # username/password exchange).
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'anthias_server.lib.auth.AnthiasAPITokenAuthentication',
         'anthias_server.lib.auth.DeprecatedBasicAuthentication',
         'anthias_server.lib.auth.GatedSessionAuthentication',
     ],

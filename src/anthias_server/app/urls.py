@@ -35,6 +35,16 @@ urlpatterns = [
         name='settings_display_power',
     ),
     path(
+        'settings/api-tokens/create/',
+        views.api_tokens_create,
+        name='api_tokens_create',
+    ),
+    path(
+        'settings/api-tokens/<int:token_id>/revoke/',
+        views.api_tokens_revoke,
+        name='api_tokens_revoke',
+    ),
+    path(
         'settings/migrate-to-screenly/',
         views.migrate_to_screenly,
         name='migrate_to_screenly',
