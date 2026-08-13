@@ -419,6 +419,19 @@ if getenv('ANTHIAS_SERVICE') != 'viewer':
         'dbbackup',
     ]
 
+# The fleet-management console — a separate deployable that reuses this
+# same codebase's templates/static/auth/DRF wiring (see ANTHIAS_SERVICE
+# == 'fleet' branches below for ROOT_URLCONF/DATABASES) rather than a
+# second repo. `anthias_server.app` stays installed even in fleet mode
+# (it's in the unconditional block above) purely so Django's APP_DIRS
+# template/staticfiles finders keep resolving base.html/CSS/JS from
+# it; the fleet DB ends up with an unused, empty `app_asset` table as a
+# result — cosmetic, not a functional issue.
+if getenv('ANTHIAS_SERVICE') == 'fleet':
+    INSTALLED_APPS += [
+        'anthias_server.fleet.apps.FleetConfig',
+    ]
+
 # Sonar's S4502 ("disabling CSRF protection") fires on the MIDDLEWARE
 # list because it pattern-matches the literal ``CsrfViewMiddleware``
 # class name and doesn't see one. SameHostOriginCsrfMiddleware (see
@@ -445,7 +458,14 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]  # NOSONAR
 
-ROOT_URLCONF = 'anthias_server.django_project.urls'
+# The fleet server has no local assets/API of its own to serve — it
+# mounts anthias_server.fleet.urls instead of the player's app.urls,
+# and skips the player-only /api, /api/docs, and /anthias_assets routes.
+ROOT_URLCONF = (
+    'anthias_server.django_project.fleet_urls'
+    if getenv('ANTHIAS_SERVICE') == 'fleet'
+    else 'anthias_server.django_project.urls'
+)
 
 TEMPLATES = [
     {
@@ -506,6 +526,12 @@ if getenv('ENVIRONMENT') == 'test' or _running_under_pytest:
     db_path = getenv('ANTHIAS_TEST_DB_PATH') or str(
         BASE_DIR / '.anthias-test.db'
     )
+elif getenv('ANTHIAS_SERVICE') == 'fleet':
+    # Deliberately a different filename (not just a different volume
+    # mount) as a structural guard: even if a fleet container were
+    # ever accidentally pointed at a player's /data volume, it still
+    # can't collide with that player's own anthias.db.
+    db_path = '/data/.anthias/fleet.db'
 else:
     db_path = '/data/.anthias/anthias.db'
 

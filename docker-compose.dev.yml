@@ -49,6 +49,34 @@ services:
       - anthias-data:/data
       - ./:/usr/src/app/
 
+  anthias-fleet:
+    # Reuses anthias-server:dev — same trick as anthias-celery above,
+    # just a different ANTHIAS_SERVICE/command instead of a second
+    # ~825MB image build. See django_project/settings.py's
+    # ANTHIAS_SERVICE == 'fleet' branches (INSTALLED_APPS, ROOT_URLCONF,
+    # DATABASES) for what actually changes at runtime.
+    image: anthias-server:dev
+    depends_on:
+      anthias-server:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    ports:
+      - 8001:8080
+    environment:
+      - HOME=/data
+      - LISTEN=0.0.0.0
+      - ANTHIAS_SERVICE=fleet
+      - ENVIRONMENT=development
+    restart: always
+    volumes:
+      # Deliberately a separate named volume, never anthias-data — a
+      # misconfigured fleet container must not be able to read/write a
+      # player's own asset DB even if someone fat-fingers the compose
+      # file later.
+      - anthias-fleet-data:/data
+      - ./:/usr/src/app/
+
   redis:
     platform: "linux/amd64"
     image: mirror.gcr.io/library/redis:alpine
@@ -61,4 +89,5 @@ services:
 
 volumes:
     anthias-data:
+    anthias-fleet-data:
     redis-data:

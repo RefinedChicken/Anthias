@@ -21,7 +21,18 @@ echo "Running migration..."
 # The following block ensures that the migration is transactional and that the
 # database is not left in an inconsistent state if the migration fails.
 
-if [ -f /data/.anthias/anthias.db ]; then
+# Mirrors the db_path branch in django_project/settings.py: the fleet
+# server writes fleet.db, not anthias.db, so this check has to key off
+# the same ANTHIAS_SERVICE env var Django itself uses rather than a
+# hardcoded filename, or it would always take the "first boot" branch
+# on every fleet container restart.
+if [[ "${ANTHIAS_SERVICE:-}" == "fleet" ]]; then
+    ANTHIAS_DB_FILE=/data/.anthias/fleet.db
+else
+    ANTHIAS_DB_FILE=/data/.anthias/anthias.db
+fi
+
+if [ -f "$ANTHIAS_DB_FILE" ]; then
     python -m anthias_server.manage dbbackup --noinput --clean && \
         python -m anthias_server.manage migrate --fake-initial --noinput || \
         python -m anthias_server.manage dbrestore --noinput
