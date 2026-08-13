@@ -50,6 +50,13 @@ server = [
     "certifi==2026.7.22",
     "channels==4.3.2",
     "channels-redis==4.3.0",
+    # Fernet-encrypts Player.api_token_encrypted at rest on the fleet
+    # server (a stolen fleet DB otherwise hands over live credentials
+    # for every registered player). Was only ever present transitively
+    # via dev-host's ansible-lint — pinned directly here so it actually
+    # ships in the server/fleet image rather than relying on a dep
+    # that's absent from this group's install.
+    "cryptography==50.0.0",
     "Django==5.2.14",
     "djangorestframework==3.17.1",
     "django-dbbackup==5.3.0",

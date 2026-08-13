@@ -427,7 +427,23 @@ if getenv('ANTHIAS_SERVICE') != 'viewer':
 # template/staticfiles finders keep resolving base.html/CSS/JS from
 # it; the fleet DB ends up with an unused, empty `app_asset` table as a
 # result — cosmetic, not a functional issue.
-if getenv('ANTHIAS_SERVICE') == 'fleet':
+#
+# Also installed under the test runner regardless of ANTHIAS_SERVICE,
+# mirroring how anthias_server.api already behaves in tests (it's
+# gated on `!= 'viewer'`, which is true whenever ANTHIAS_SERVICE is
+# simply unset, as it is for a normal `pytest` invocation) — otherwise
+# every fleet-model test would need its own separate
+# `ANTHIAS_SERVICE=fleet pytest ...` invocation instead of running
+# under the one `pytest -m "not integration"` CI already runs.
+# Route/view-level fleet tests still need
+# `@pytest.mark.urls('anthias_server.django_project.fleet_urls')` —
+# this only makes the app's models available, it doesn't switch
+# ROOT_URLCONF for the whole test session.
+if (
+    getenv('ANTHIAS_SERVICE') == 'fleet'
+    or getenv('ENVIRONMENT') == 'test'
+    or _running_under_pytest
+):
     INSTALLED_APPS += [
         'anthias_server.fleet.apps.FleetConfig',
     ]
