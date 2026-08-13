@@ -74,6 +74,27 @@ celery = Celery(
     result_expires=CELERY_TASK_RESULT_EXPIRES,
 )
 
+# anthias_server.fleet is only in INSTALLED_APPS when running as the
+# fleet service (or under the test runner — see settings.py's
+# ANTHIAS_SERVICE == 'fleet' or ENVIRONMENT == 'test' check), but this
+# module is imported by BOTH the player's celery worker and the
+# fleet's celery worker. An unconditional import of
+# anthias_server.fleet.models here would crash the player's worker at
+# import time with a Django RuntimeError about the model's app not
+# being installed, so the import is gated the same way the rest of
+# the fleet app is. This has to sit after `celery` is assigned above
+# (not in the Django-imports block near the top of the file):
+# fleet.tasks imports `celery` from this module at its own top level
+# to register its @celery.task-decorated functions against the same
+# shared app, and importing it any earlier would hit a circular
+# import (celery_tasks -> fleet.tasks -> celery_tasks) before `celery`
+# exists.
+if getenv('ANTHIAS_SERVICE') == 'fleet':
+    from anthias_server.fleet.tasks import (  # noqa: F401 (registers tasks)
+        heartbeat_sweep,
+        poll_player_heartbeat,
+    )
+
 
 # Sweep cadence for the asset URL re-validation job. 15 min is short
 # enough to catch a stream that's been down for a rotation or two,
@@ -306,26 +327,48 @@ def wait_for_migrations(**kwargs: Any) -> None:
         waited += MIGRATION_WAIT_POLL_S
 
 
+# Sweep cadence for the fleet heartbeat. Short enough that the
+# console's reachability column reflects a player going down within
+# about half a minute; long enough that a fleet of many players
+# doesn't keep re-enqueuing per-player polls faster than they can
+# drain.
+HEARTBEAT_SWEEP_INTERVAL_S = 30
+
+
 @celery.on_after_configure.connect
 def setup_periodic_tasks(sender: Any, **kwargs: Any) -> None:
-    # Calls cleanup() every hour.
-    sender.add_periodic_task(3600, cleanup.s(), name='cleanup')
-    sender.add_periodic_task(
-        60 * 5, get_display_power.s(), name='display_power'
-    )
-    # Hourly tick; send_telemetry_task itself enforces a 24h cooldown
-    # via Redis, so each device emits at most one GA event per day.
-    sender.add_periodic_task(3600, send_telemetry_task.s(), name='telemetry')
-    sender.add_periodic_task(
-        ASSET_REVALIDATION_INTERVAL_S,
-        revalidate_asset_urls.s(),
-        name='revalidate_asset_urls',
-    )
-    sender.add_periodic_task(
-        RECONCILE_STUCK_INTERVAL_S,
-        reconcile_stuck_processing.s(),
-        name='reconcile_stuck_processing',
-    )
+    # A fleet-celery worker has no local hardware to poll and no local
+    # Asset table to revalidate against — these five periodic tasks
+    # are all player-only. See HEARTBEAT_SWEEP_INTERVAL_S below for
+    # the fleet-only counterpart.
+    if getenv('ANTHIAS_SERVICE') != 'fleet':
+        # Calls cleanup() every hour.
+        sender.add_periodic_task(3600, cleanup.s(), name='cleanup')
+        sender.add_periodic_task(
+            60 * 5, get_display_power.s(), name='display_power'
+        )
+        # Hourly tick; send_telemetry_task itself enforces a 24h
+        # cooldown via Redis, so each device emits at most one GA
+        # event per day.
+        sender.add_periodic_task(
+            3600, send_telemetry_task.s(), name='telemetry'
+        )
+        sender.add_periodic_task(
+            ASSET_REVALIDATION_INTERVAL_S,
+            revalidate_asset_urls.s(),
+            name='revalidate_asset_urls',
+        )
+        sender.add_periodic_task(
+            RECONCILE_STUCK_INTERVAL_S,
+            reconcile_stuck_processing.s(),
+            name='reconcile_stuck_processing',
+        )
+    else:
+        sender.add_periodic_task(
+            HEARTBEAT_SWEEP_INTERVAL_S,
+            heartbeat_sweep.s(),
+            name='heartbeat_sweep',
+        )
 
 
 @celery.task(

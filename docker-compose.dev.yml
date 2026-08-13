@@ -77,6 +77,36 @@ services:
       - anthias-fleet-data:/data
       - ./:/usr/src/app/
 
+  anthias-fleet-celery:
+    # Reuses anthias-server:dev — same trick as anthias-celery above,
+    # just ANTHIAS_SERVICE=fleet instead of a second ~825MB image
+    # build.
+    image: anthias-server:dev
+    depends_on:
+      anthias-fleet:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    command: >
+      nice -n 19 ionice -c 3
+      celery -A anthias_server.celery_tasks.celery worker -B -n worker@anthias-fleet
+      --loglevel=info --scheduler celery.beat.Scheduler
+    environment:
+      - HOME=/data
+      - ANTHIAS_SERVICE=fleet
+      - ENVIRONMENT=development
+      # Deliberately DB 1, not the player anthias-celery's DB 0 — the
+      # fleet's independently-scheduled beat/worker pool must not
+      # cross-talk with a player's broker/result-backend namespace on
+      # the same shared redis instance.
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    restart: always
+    volumes:
+      # Same volume as anthias-fleet — they share one fleet DB.
+      - anthias-fleet-data:/data
+      - ./:/usr/src/app/
+
   redis:
     platform: "linux/amd64"
     image: mirror.gcr.io/library/redis:alpine
