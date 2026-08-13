@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -17,7 +18,7 @@ from anthias_server.fleet.tasks import heartbeat_sweep, poll_player_heartbeat
 _RAW_TOKEN = 'ant_fixture-task-token'  # NOSONAR
 
 
-def _make_player(**overrides: object) -> Player:
+def _make_player(**overrides: Any) -> Player:
     player = Player(
         name=overrides.pop('name', 'Lobby TV'),
         base_url=overrides.pop('base_url', 'http://192.168.1.50:8080'),

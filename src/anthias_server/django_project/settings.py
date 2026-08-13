@@ -411,41 +411,30 @@ if getenv('ANTHIAS_SERVICE') != 'viewer':
         'drf_spectacular',
         'rest_framework',
         'anthias_server.api.apps.ApiConfig',
+        # The fleet-management console — a separate deployable
+        # (ANTHIAS_SERVICE=fleet) that reuses this same codebase's
+        # templates/static/auth/DRF wiring rather than a second repo
+        # (see the ANTHIAS_SERVICE == 'fleet' branches below for
+        # ROOT_URLCONF/DATABASES). Installed unconditionally here,
+        # alongside `api`, rather than gated on ANTHIAS_SERVICE ==
+        # 'fleet': the player/celery/test processes end up with
+        # unused, empty `fleet_players`/`fleet_player_groups` tables
+        # as a result, mirroring the already-accepted cosmetic
+        # `app_asset`-on-fleet.db tradeoff in the other direction.
+        # Gating it further caused a real, not cosmetic, problem: the
+        # `[tool.django-stubs]` mypy plugin loads this settings module
+        # with no ANTHIAS_SERVICE/ENVIRONMENT set, so a conditional
+        # install made django-stubs blind to `Player`/`PlayerGroup`
+        # ("type[Player]" has no attribute "objects") everywhere
+        # outside a real fleet process or a pytest run — a CI-breaking
+        # gap, not a hypothetical one.
+        'anthias_server.fleet.apps.FleetConfig',
         'django.contrib.admin',
         'django.contrib.humanize',
         'django.contrib.sessions',
         'django.contrib.messages',
         'django.contrib.staticfiles',
         'dbbackup',
-    ]
-
-# The fleet-management console — a separate deployable that reuses this
-# same codebase's templates/static/auth/DRF wiring (see ANTHIAS_SERVICE
-# == 'fleet' branches below for ROOT_URLCONF/DATABASES) rather than a
-# second repo. `anthias_server.app` stays installed even in fleet mode
-# (it's in the unconditional block above) purely so Django's APP_DIRS
-# template/staticfiles finders keep resolving base.html/CSS/JS from
-# it; the fleet DB ends up with an unused, empty `app_asset` table as a
-# result — cosmetic, not a functional issue.
-#
-# Also installed under the test runner regardless of ANTHIAS_SERVICE,
-# mirroring how anthias_server.api already behaves in tests (it's
-# gated on `!= 'viewer'`, which is true whenever ANTHIAS_SERVICE is
-# simply unset, as it is for a normal `pytest` invocation) — otherwise
-# every fleet-model test would need its own separate
-# `ANTHIAS_SERVICE=fleet pytest ...` invocation instead of running
-# under the one `pytest -m "not integration"` CI already runs.
-# Route/view-level fleet tests still need
-# `@pytest.mark.urls('anthias_server.django_project.fleet_urls')` —
-# this only makes the app's models available, it doesn't switch
-# ROOT_URLCONF for the whole test session.
-if (
-    getenv('ANTHIAS_SERVICE') == 'fleet'
-    or getenv('ENVIRONMENT') == 'test'
-    or _running_under_pytest
-):
-    INSTALLED_APPS += [
-        'anthias_server.fleet.apps.FleetConfig',
     ]
 
 # Sonar's S4502 ("disabling CSRF protection") fires on the MIDDLEWARE
