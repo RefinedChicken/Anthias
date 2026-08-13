@@ -337,17 +337,33 @@ if _board_model:
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = getenv('ENVIRONMENT', 'production') in ['development', 'test']
 
-if not DEBUG:
-    if not device_settings.get('django_secret_key'):
-        # Modify the generated so that string interpolation
-        # errors can be avoided.
-        secret_key = secrets.token_urlsafe(50)
-        device_settings['django_secret_key'] = secret_key
-        device_settings.save()
+# device_settings['django_secret_key'] is a distinct concern from
+# Django's own SECRET_KEY below: it's the device's persistent secret,
+# also used by anthias_common.internal_auth (viewer<->server HMAC) and
+# anthias_server.fleet.crypto (Fernet-encrypting a fleet server's
+# stored player API tokens) — both need a real, non-guessable,
+# per-device value regardless of DEBUG. Previously this generate-and-
+# persist step only ran when `not DEBUG`, so a dev/test container
+# never populated it at all: internal_auth silently no-ops on an empty
+# secret (degrades to "no internal requests authenticate", easy to
+# miss), but fleet.crypto raises loudly the first time anything tries
+# to encrypt a token — which is how this gap surfaced.
+if not device_settings.get('django_secret_key'):
+    # Modify the generated so that string interpolation
+    # errors can be avoided.
+    secret_key = secrets.token_urlsafe(50)
+    device_settings['django_secret_key'] = secret_key
+    device_settings.save()
 
+if not DEBUG:
     SECRET_KEY = device_settings.get('django_secret_key')
 else:
     # SECURITY WARNING: keep the secret key used in production secret!
+    # Deliberately still a hardcoded constant in dev/test (not the
+    # per-device value above) — session cookies and CSRF tokens then
+    # survive a container rebuild without invalidating an operator's
+    # local login, which isn't a concern for the throwaway per-device
+    # secret above.
     SECRET_KEY = (
         'django-insecure-7rz*$)g6dk&=h-3imq2xw*iu!zuhfb&w6v482_vs!w@4_gha=j'
     )
