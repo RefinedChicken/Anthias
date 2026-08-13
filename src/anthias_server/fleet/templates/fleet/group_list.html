@@ -38,7 +38,7 @@
       </thead>
       <tbody>
         {% for group in groups %}
-        <tr>
+        <tr x-data="{ confirmingDelete: false }">
           <td data-label="Name">{{ group.name }}</td>
           <td data-label="Description">{{ group.description|default:"—" }}</td>
           <td data-label="Players">{{ group.player_count }}</td>
@@ -47,12 +47,16 @@
               <a href="{% url 'anthias_fleet:group_edit' group.id %}" class="app-btn app-btn-icon" title="Edit">
                 <i class="ti ti-pencil"></i>
               </a>
-              <form method="post" action="{% url 'anthias_fleet:group_delete' group.id %}" class="inline m-0"
-                onsubmit="return confirm('Delete group {{ group.name|escapejs }}? Players in it are not deleted, just ungrouped.')">
-                {% csrf_token %}
-                <button type="submit" class="app-btn app-btn-icon" title="Delete">
+              <span x-show="!confirmingDelete">
+                <button type="button" class="app-btn app-btn-icon" title="Delete" @click="confirmingDelete = true">
                   <i class="ti ti-trash"></i>
                 </button>
+              </span>
+              <form x-show="confirmingDelete" x-cloak method="post" action="{% url 'anthias_fleet:group_delete' group.id %}" class="inline flex items-center gap-2 m-0">
+                {% csrf_token %}
+                <span class="muted-label">Delete?</span>
+                <button type="submit" class="app-btn app-btn-danger" title="Confirm deletion">Yes</button>
+                <button type="button" class="app-btn app-btn-link" @click="confirmingDelete = false">Cancel</button>
               </form>
             </div>
           </td>
