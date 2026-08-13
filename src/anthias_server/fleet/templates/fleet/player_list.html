@@ -1,0 +1,53 @@
+{% extends "_layout.html" %}
+{% load static %}
+
+{% block title %}Fleet · Players{% endblock %}
+
+{% block main %}
+<div
+  class="app-container"
+  x-data="{
+    selected: [],
+    pendingAction: null,
+    isSelected(id) { return this.selected.includes(id) },
+    toggle(id) {
+      this.selected = this.isSelected(id)
+        ? this.selected.filter((x) => x !== id)
+        : [...this.selected, id]
+    },
+    allSelected(ids) { return ids.length > 0 && ids.every((id) => this.isSelected(id)) },
+    someSelected(ids) { return ids.some((id) => this.isSelected(id)) && !this.allSelected(ids) },
+    toggleAll(ids, checked) {
+      this.selected = checked
+        ? Array.from(new Set([...this.selected, ...ids]))
+        : this.selected.filter((id) => !ids.includes(id))
+    },
+    clearSelection() { this.selected = [] },
+    syncSelection(ids) { this.selected = this.selected.filter((id) => ids.includes(id)) },
+  }"
+>
+  <div class="page-header-bar">
+    <div class="page-header-bar__title">
+      <h1 class="page-header">Players</h1>
+      <p class="page-header-bar__lede">Every Anthias player this console manages.</p>
+    </div>
+    <div class="page-header-bar__actions">
+      <a href="{% url 'anthias_fleet:player_new' %}" class="app-btn app-btn-primary app-btn-pill">
+        <i class="ti ti-plus"></i><span>Add Player</span>
+      </a>
+    </div>
+  </div>
+
+  <div class="stat-grid mb-4">
+    {% include "_stat_card.html" with label="Players" value=total_players %}
+    {% include "_stat_card.html" with label="Online" value=online_players %}
+    {% include "_stat_card.html" with label="Offline" value=offline_players %}
+  </div>
+
+  {% comment %}Flash messages are emitted as toasts by _toasts.html (vendor.ts drainDjangoMessages()).{% endcomment %}
+
+  {% include "fleet/_player_table.html" %}
+
+  {% include "fleet/_players_bulk_action_bar.html" %}
+</div>
+{% endblock %}

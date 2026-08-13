@@ -1,0 +1,71 @@
+{% extends "_layout.html" %}
+
+{% block title %}Fleet · Add Player{% endblock %}
+
+{% block main %}
+<div class="app-container">
+  <div class="page-header-bar">
+    <div class="page-header-bar__title">
+      <h1 class="page-header">Add Player</h1>
+      <p class="page-header-bar__lede">
+        Register an existing Anthias player. Its own server/DB/API stay
+        exactly as they are — this console just calls its API remotely.
+      </p>
+    </div>
+  </div>
+
+  <form method="post" action="{% url 'anthias_fleet:player_new' %}" class="settings-stack">
+    {% csrf_token %}
+    <section class="settings-section">
+      <header>
+        <div>
+          <h2>Player details</h2>
+          <p class="settings-section__lede">
+            The API token is generated on the player itself under
+            Settings &rarr; API tokens.
+          </p>
+        </div>
+      </header>
+
+      <div class="app-form-grid mb-4">
+        <div class="app-floating">
+          <input type="text" class="app-input" id="name" name="name" placeholder=" " required
+            value="{{ form_values.name|default:'' }}">
+          <label for="name">Name</label>
+        </div>
+        <div class="app-floating">
+          <select class="app-select" id="group" name="group">
+            <option value="">No group</option>
+            {% for group in groups %}
+            <option value="{{ group.id }}" {% if form_values.group == group.id|stringformat:"s" %}selected{% endif %}>{{ group.name }}</option>
+            {% endfor %}
+          </select>
+          <label for="group">Group</label>
+        </div>
+      </div>
+
+      <div class="app-floating mb-4">
+        <input type="url" class="app-input" id="base_url" name="base_url" placeholder=" " required
+          value="{{ form_values.base_url|default:'' }}">
+        <label for="base_url">Base URL (e.g. http://192.168.1.50:8080)</label>
+      </div>
+
+      <div class="app-floating mb-4">
+        <input type="password" class="app-input" id="api_token" name="api_token" placeholder=" " required autocomplete="off">
+        <label for="api_token">API token</label>
+      </div>
+
+      <div>
+        {% include "_settings_toggle.html" with name="skip_ssl_verify" label="Skip SSL verification" hint="Turn on only if this player is reached over HTTPS with a self-signed or untrusted certificate." checked=False %}
+      </div>
+    </section>
+
+    <div class="flex justify-end gap-2">
+      <a href="{% url 'anthias_fleet:player_list' %}" class="app-btn app-btn-link">Cancel</a>
+      <button type="submit" class="app-btn app-btn-primary">
+        <i class="ti ti-check"></i><span>Register player</span>
+      </button>
+    </div>
+  </form>
+</div>
+{% endblock %}

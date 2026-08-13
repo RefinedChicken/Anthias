@@ -1,0 +1,102 @@
+{% load asset_filters %}
+{% with pills=asset|schedule_pills %}
+<tr data-asset-id="{{ asset.asset_id }}" :class="isSelected('{{ asset.asset_id }}') && 'is-selected'">
+  <td class="asset-select-col" data-label="Select" data-no-label>
+    <label class="asset-select">
+      <input type="checkbox" class="app-check-input"
+        :checked="isSelected('{{ asset.asset_id }}')"
+        @change="toggle('{{ asset.asset_id }}')"
+        aria-label="Select {{ asset.name|default:'asset'|escape }}">
+    </label>
+  </td>
+  <td data-label="Name" data-no-label>
+    <div class="asset-cell-name">
+      <span class="asset-cell-name__icon">
+        {% if asset.mimetype == 'image' %}<i class="ti ti-photo"></i>
+        {% elif asset.mimetype == 'video' %}<i class="ti ti-video"></i>
+        {% else %}<i class="ti ti-world"></i>
+        {% endif %}
+      </span>
+      <span class="asset-cell-name__title">
+        <span class="asset-cell-name__primary" title="{{ asset.name }}">{{ asset.name }}</span>
+        {% if pills %}
+        <span class="schedule-chips">
+          {% for pill in pills %}
+          <span class="schedule-chip schedule-chip--{{ pill.kind }}">
+            {% if pill.kind == 'all' %}<i class="ti ti-calendar-check"></i>
+            {% elif pill.kind == 'time' %}<i class="ti ti-clock"></i>
+            {% else %}<i class="ti ti-calendar-event"></i>{% endif %}
+            <span>{{ pill.label }}</span>
+          </span>
+          {% endfor %}
+        </span>
+        {% endif %}
+      </span>
+    </div>
+  </td>
+  {% with window=asset|schedule_window %}
+  <td data-label="Schedule window">
+    <div class="schedule-window schedule-window--{{ window.kind }}">
+      <div class="schedule-window__dot" aria-hidden="true"></div>
+      <div>
+        <p class="schedule-window__primary">{{ window.primary }}</p>
+        {% if window.secondary %}<p class="schedule-window__secondary">{{ window.secondary }}</p>{% endif %}
+      </div>
+    </div>
+  </td>
+  {% endwith %}
+  <td data-label="Duration">{{ asset.duration|humanize_duration }}</td>
+  <td data-label="Enabled">
+    {% if asset.is_processing %}
+    <span class="processing-pill"><i class="ti ti-refresh"></i>Processing</span>
+    {% else %}
+    <form method="post" action="{% url 'anthias_fleet:player_asset_toggle' player.id asset.asset_id %}"
+      hx-post="{% url 'anthias_fleet:player_asset_toggle' player.id asset.asset_id %}"
+      hx-target="#player-asset-table" hx-swap="outerHTML" class="m-0">
+      {% csrf_token %}
+      <input type="hidden" name="is_enabled" value="{{ asset.is_enabled|yesno:'false,true' }}">
+      <div class="app-check app-switch activity-toggle m-0">
+        <input
+          type="checkbox"
+          class="app-check-input"
+          {% if asset.is_enabled %}checked{% endif %}
+          aria-label="Toggle active"
+          onchange="this.form.requestSubmit()"
+        >
+      </div>
+    </form>
+    {% endif %}
+  </td>
+  <td class="text-right" data-label="Actions">
+    <div class="action-group">
+      {% if is_active %}
+      <form method="post" action="{% url 'anthias_fleet:player_asset_move' player.id asset.asset_id 'up' %}"
+        hx-post="{% url 'anthias_fleet:player_asset_move' player.id asset.asset_id 'up' %}"
+        hx-target="#player-asset-table" hx-swap="outerHTML" class="inline m-0">
+        {% csrf_token %}
+        <button type="submit" class="app-btn app-btn-icon" title="Move up" {% if forloop_first %}disabled{% endif %}>
+          <i class="ti ti-arrow-up"></i>
+        </button>
+      </form>
+      <form method="post" action="{% url 'anthias_fleet:player_asset_move' player.id asset.asset_id 'down' %}"
+        hx-post="{% url 'anthias_fleet:player_asset_move' player.id asset.asset_id 'down' %}"
+        hx-target="#player-asset-table" hx-swap="outerHTML" class="inline m-0">
+        {% csrf_token %}
+        <button type="submit" class="app-btn app-btn-icon" title="Move down" {% if forloop_last %}disabled{% endif %}>
+          <i class="ti ti-arrow-down"></i>
+        </button>
+      </form>
+      {% endif %}
+      <form method="post" action="{% url 'anthias_fleet:player_asset_delete' player.id asset.asset_id %}"
+        hx-post="{% url 'anthias_fleet:player_asset_delete' player.id asset.asset_id %}"
+        hx-target="#player-asset-table" hx-swap="outerHTML" class="inline m-0"
+        onsubmit="return confirm('Delete {{ asset.name|default:'this asset'|escapejs }}?')">
+        {% csrf_token %}
+        <button type="submit" class="app-btn app-btn-icon" title="Delete">
+          <i class="ti ti-trash"></i>
+        </button>
+      </form>
+    </div>
+  </td>
+</tr>
+{% endwith %}

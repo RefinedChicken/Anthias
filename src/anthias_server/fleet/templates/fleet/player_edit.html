@@ -1,0 +1,62 @@
+{% extends "_layout.html" %}
+
+{% block title %}Fleet · Edit {{ player.name }}{% endblock %}
+
+{% block main %}
+<div class="app-container">
+  <div class="page-header-bar">
+    <div class="page-header-bar__title">
+      <h1 class="page-header">Edit {{ player.name }}</h1>
+      <p class="page-header-bar__lede">Update this player's connection details.</p>
+    </div>
+  </div>
+
+  <form method="post" action="{% url 'anthias_fleet:player_edit' player.id %}" class="settings-stack">
+    {% csrf_token %}
+    <section class="settings-section">
+      <header>
+        <div>
+          <h2>Player details</h2>
+        </div>
+      </header>
+
+      <div class="app-form-grid mb-4">
+        <div class="app-floating">
+          <input type="text" class="app-input" id="name" name="name" placeholder=" " required value="{{ player.name }}">
+          <label for="name">Name</label>
+        </div>
+        <div class="app-floating">
+          <select class="app-select" id="group" name="group">
+            <option value="">No group</option>
+            {% for group in groups %}
+            <option value="{{ group.id }}" {% if player.group_id == group.id %}selected{% endif %}>{{ group.name }}</option>
+            {% endfor %}
+          </select>
+          <label for="group">Group</label>
+        </div>
+      </div>
+
+      <div class="app-floating mb-4">
+        <input type="url" class="app-input" id="base_url" name="base_url" placeholder=" " required value="{{ player.base_url }}">
+        <label for="base_url">Base URL</label>
+      </div>
+
+      <div class="app-floating mb-4">
+        <input type="password" class="app-input" id="api_token" name="api_token" placeholder=" " autocomplete="off">
+        <label for="api_token">API token (leave blank to keep the current one)</label>
+      </div>
+
+      <div>
+        {% include "_settings_toggle.html" with name="skip_ssl_verify" label="Skip SSL verification" hint="Turn on only if this player is reached over HTTPS with a self-signed or untrusted certificate." checked=player.skip_ssl_verify %}
+      </div>
+    </section>
+
+    <div class="flex justify-end gap-2">
+      <a href="{% url 'anthias_fleet:player_detail' player.id %}" class="app-btn app-btn-link">Cancel</a>
+      <button type="submit" class="app-btn app-btn-primary">
+        <i class="ti ti-check"></i><span>Save changes</span>
+      </button>
+    </div>
+  </form>
+</div>
+{% endblock %}

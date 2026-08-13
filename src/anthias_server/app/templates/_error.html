@@ -36,7 +36,17 @@
       <p class="auth-subhead">{% block error_subhead %}{% endblock %}</p>
 
       {% block error_cta %}
-      <a href="{% url 'anthias_app:home' %}" class="app-btn app-btn-primary auth-submit">
+      {% comment %} Root-relative "/" rather than {% url 'anthias_app:home' %}
+         deliberately: this template also renders under
+         ANTHIAS_SERVICE=fleet's ROOT_URLCONF (no 'anthias_app'
+         namespace there — 'anthias_fleet:player_list' is what's
+         mounted at '/'), and Django's default error handlers
+         (page_not_found/server_error/etc.) render it directly with no
+         view-supplied context to key an app-aware branch off of. Both
+         apps mount their own "home" page at exactly '/', so a literal
+         root link is correct for either without needing to know which
+         one is active. {% endcomment %}
+      <a href="/" class="app-btn app-btn-primary auth-submit">
         <i class="ti ti-home"></i><span>Back to dashboard</span>
       </a>
       {% endblock %}

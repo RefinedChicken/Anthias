@@ -1,0 +1,75 @@
+{% extends "_layout.html" %}
+
+{% block title %}Fleet · Groups{% endblock %}
+
+{% block main %}
+<div class="app-container">
+  <div class="page-header-bar">
+    <div class="page-header-bar__title">
+      <h1 class="page-header">Groups</h1>
+      <p class="page-header-bar__lede">Organize players into groups.</p>
+    </div>
+    <div class="page-header-bar__actions">
+      <a href="{% url 'anthias_fleet:group_new' %}" class="app-btn app-btn-primary app-btn-pill">
+        <i class="ti ti-plus"></i><span>Add Group</span>
+      </a>
+    </div>
+  </div>
+
+  {% comment %}Flash messages are emitted as toasts by _toasts.html (vendor.ts drainDjangoMessages()).{% endcomment %}
+
+  <section class="surface">
+    <header class="surface__header">
+      <div class="surface__header-left">
+        <h2><i class="ti ti-folders mr-2"></i>Groups</h2>
+      </div>
+      <span class="surface__count">{{ groups|length }} group{{ groups|length|pluralize }}</span>
+    </header>
+
+    {% if groups %}
+    <table class="asset-table">
+      <thead>
+        <tr>
+          <th scope="col">Name</th>
+          <th scope="col">Description</th>
+          <th scope="col">Players</th>
+          <th scope="col" class="text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for group in groups %}
+        <tr>
+          <td data-label="Name">{{ group.name }}</td>
+          <td data-label="Description">{{ group.description|default:"—" }}</td>
+          <td data-label="Players">{{ group.player_count }}</td>
+          <td class="text-right" data-label="Actions">
+            <div class="action-group">
+              <a href="{% url 'anthias_fleet:group_edit' group.id %}" class="app-btn app-btn-icon" title="Edit">
+                <i class="ti ti-pencil"></i>
+              </a>
+              <form method="post" action="{% url 'anthias_fleet:group_delete' group.id %}" class="inline m-0"
+                onsubmit="return confirm('Delete group {{ group.name|escapejs }}? Players in it are not deleted, just ungrouped.')">
+                {% csrf_token %}
+                <button type="submit" class="app-btn app-btn-icon" title="Delete">
+                  <i class="ti ti-trash"></i>
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-state__icon"><i class="ti ti-folders"></i></div>
+      <p class="empty-state__title">No groups yet</p>
+      <p class="empty-state__description">Groups help you organize and bulk-manage related players.</p>
+      <a href="{% url 'anthias_fleet:group_new' %}" class="empty-state__action">
+        <i class="ti ti-plus mr-1"></i>Add Group
+      </a>
+    </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

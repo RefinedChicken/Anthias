@@ -1,0 +1,133 @@
+{% comment %} Floating bulk-action bar for this one player's assets.
+   Adapted from anthias_server/app/templates/_bulk_action_bar.html —
+   same enable/disable/delete actions and htmx-partial-swap contract,
+   pointed at the fleet's per-player proxied bulk endpoint instead of
+   the player app's local one. {% endcomment %}
+<script>
+  // Same "did the bulk request actually succeed" check as
+  // home.ts's window.bulkSucceeded (bulk endpoints return 200 even
+  // when they refuse the input and just ride an error/info toast on
+  // the HX-Trigger header) — reimplemented here rather than depending
+  // on home.js, which isn't loaded on fleet pages.
+  window.fleetBulkSucceeded =
+    window.fleetBulkSucceeded ||
+    function (event) {
+      const detail = event.detail || {}
+      if (!detail.successful || !detail.xhr) return false
+      const header = detail.xhr.getResponseHeader('HX-Trigger')
+      if (!header) return true
+      try {
+        const kind = (JSON.parse(header).toast || {}).kind
+        return kind === undefined || kind === 'success'
+      } catch {
+        return true
+      }
+    }
+</script>
+<div
+  class="bulk-bar"
+  x-show="selected.length"
+  x-cloak
+  x-transition.opacity
+  role="region"
+  aria-label="Bulk asset actions"
+>
+  <div class="bulk-bar__inner">
+    <div class="bulk-bar__count">
+      <i class="ti ti-checkbox"></i>
+      <span><strong x-text="selected.length"></strong>
+        <span x-text="selected.length === 1 ? 'asset' : 'assets'"></span>
+        selected</span>
+    </div>
+
+    <div class="bulk-bar__actions">
+      <form
+        method="post"
+        action="{% url 'anthias_fleet:player_assets_bulk_action' player.id %}"
+        hx-post="{% url 'anthias_fleet:player_assets_bulk_action' player.id %}"
+        hx-target="#player-asset-table"
+        hx-swap="outerHTML"
+        hx-on::after-request="if (window.fleetBulkSucceeded(event)) window.dispatchEvent(new CustomEvent('fleet-bulk-done'))"
+        class="inline m-0"
+      >
+        {% csrf_token %}
+        <input type="hidden" name="action" value="enable">
+        <input type="hidden" name="ids" :value="selected.join(',')">
+        <button type="submit" class="app-btn app-btn-light app-btn-pill">
+          <i class="ti ti-toggle-right"></i><span>Enable</span>
+        </button>
+      </form>
+
+      <form
+        method="post"
+        action="{% url 'anthias_fleet:player_assets_bulk_action' player.id %}"
+        hx-post="{% url 'anthias_fleet:player_assets_bulk_action' player.id %}"
+        hx-target="#player-asset-table"
+        hx-swap="outerHTML"
+        hx-on::after-request="if (window.fleetBulkSucceeded(event)) window.dispatchEvent(new CustomEvent('fleet-bulk-done'))"
+        class="inline m-0"
+      >
+        {% csrf_token %}
+        <input type="hidden" name="action" value="disable">
+        <input type="hidden" name="ids" :value="selected.join(',')">
+        <button type="submit" class="app-btn app-btn-light app-btn-pill">
+          <i class="ti ti-player-pause"></i><span>Disable</span>
+        </button>
+      </form>
+
+      <button type="button" class="app-btn app-btn-danger app-btn-pill" @click="bulkDeleteOpen = true">
+        <i class="ti ti-trash"></i><span>Delete</span>
+      </button>
+
+      <button type="button" class="app-btn app-btn-icon bulk-bar__clear" @click="clearSelection()" title="Clear selection" aria-label="Clear selection">
+        <i class="ti ti-x"></i>
+      </button>
+    </div>
+  </div>
+</div>
+
+<div
+  x-show="bulkDeleteOpen"
+  x-cloak
+  class="modal-overlay"
+  style="z-index: 1060"
+  @keydown.escape.window="bulkDeleteOpen = false"
+  @click.self="bulkDeleteOpen = false"
+  @fleet-bulk-done.window="bulkDeleteOpen = false"
+>
+  <div class="modal-card modal-card--sm">
+    <div class="modal-card__header">
+      <h2>Delete selected assets?</h2>
+      <button type="button" class="modal-card__close" @click="bulkDeleteOpen = false" aria-label="Close">
+        <i class="ti ti-x"></i>
+      </button>
+    </div>
+    <div class="modal-card__body">
+      <p class="m-0">
+        You're about to delete
+        <strong><span x-text="selected.length"></span>
+          <span x-text="selected.length === 1 ? 'asset' : 'assets'"></span></strong>
+        from this player. This action cannot be undone.
+      </p>
+    </div>
+    <div class="modal-card__footer">
+      <button type="button" class="app-btn app-btn-link" @click="bulkDeleteOpen = false">Cancel</button>
+      <form
+        method="post"
+        action="{% url 'anthias_fleet:player_assets_bulk_action' player.id %}"
+        hx-post="{% url 'anthias_fleet:player_assets_bulk_action' player.id %}"
+        hx-target="#player-asset-table"
+        hx-swap="outerHTML"
+        hx-on::after-request="if (window.fleetBulkSucceeded(event)) window.dispatchEvent(new CustomEvent('fleet-bulk-done'))"
+        class="inline m-0"
+      >
+        {% csrf_token %}
+        <input type="hidden" name="action" value="delete">
+        <input type="hidden" name="ids" :value="selected.join(',')">
+        <button type="submit" class="app-btn app-btn-danger">
+          <i class="ti ti-trash"></i><span>Delete</span>
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
