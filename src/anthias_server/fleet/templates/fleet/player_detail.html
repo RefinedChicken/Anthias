@@ -1,0 +1,123 @@
+{% extends "_layout.html" %}
+
+{% block title %}Fleet · {{ player.name }}{% endblock %}
+
+{% block main %}
+<div
+  class="app-container"
+  x-data="{
+    selected: [],
+    showAddForm: false,
+    bulkDeleteOpen: false,
+    isSelected(id) { return this.selected.includes(id) },
+    toggle(id) {
+      this.selected = this.isSelected(id)
+        ? this.selected.filter((x) => x !== id)
+        : [...this.selected, id]
+    },
+    allSelected(ids) { return ids.length > 0 && ids.every((id) => this.isSelected(id)) },
+    someSelected(ids) { return ids.some((id) => this.isSelected(id)) && !this.allSelected(ids) },
+    toggleAll(ids, checked) {
+      this.selected = checked
+        ? Array.from(new Set([...this.selected, ...ids]))
+        : this.selected.filter((id) => !ids.includes(id))
+    },
+    clearSelection() { this.selected = [] },
+    syncSelection(activeIds, inactiveIds) {
+      const ids = [...activeIds, ...inactiveIds]
+      this.selected = this.selected.filter((id) => ids.includes(id))
+    },
+  }"
+>
+  <div class="page-header-bar">
+    <div class="page-header-bar__title">
+      <h1 class="page-header">{{ player.name }}</h1>
+      <p class="page-header-bar__lede">
+        {{ player.base_url }}
+        {% if player.group %} · {{ player.group.name }}{% endif %}
+        {% if player.is_reachable %}
+        · <span style="color:#2f9e44">Online</span>
+        {% else %}
+        · <span style="color:#e03131">Offline</span>
+        {% endif %}
+      </p>
+    </div>
+    <div class="page-header-bar__actions">
+      <form method="post" action="{% url 'anthias_fleet:player_asset_control' player.id 'previous' %}" class="inline m-0">
+        {% csrf_token %}
+        <button type="submit" class="app-btn app-btn-light app-btn-pill" title="Skip to previous asset">
+          <i class="ti ti-player-skip-back"></i><span class="hidden md:inline">Previous</span>
+        </button>
+      </form>
+      <form method="post" action="{% url 'anthias_fleet:player_asset_control' player.id 'next' %}" class="inline m-0">
+        {% csrf_token %}
+        <button type="submit" class="app-btn app-btn-light app-btn-pill" title="Skip to next asset">
+          <i class="ti ti-player-skip-forward"></i><span class="hidden md:inline">Next</span>
+        </button>
+      </form>
+      <a href="{% url 'anthias_fleet:player_edit' player.id %}" class="app-btn app-btn-outline-dark app-btn-pill">
+        <i class="ti ti-settings"></i><span>Edit player</span>
+      </a>
+      <button type="button" class="app-btn app-btn-primary app-btn-pill" @click="showAddForm = !showAddForm">
+        <i class="ti ti-plus"></i><span>Add Asset</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="stat-grid mb-4">
+    {% include "_stat_card.html" with label="Device model" value=player.device_model|default:"Unknown" %}
+    {% include "_stat_card.html" with label="Anthias version" value=player.anthias_version|default:"Unknown" %}
+    {% include "_stat_card.html" with label="MAC address" value=player.mac_address|default:"Unknown" %}
+  </div>
+
+  {% if fetch_error %}
+  <div class="error-card mb-4">
+    <i class="ti ti-alert-triangle"></i>
+    <span>{{ fetch_error }}</span>
+  </div>
+  {% endif %}
+
+  {% comment %}Flash messages are emitted as toasts by _toasts.html (vendor.ts drainDjangoMessages()).{% endcomment %}
+
+  <div x-show="showAddForm" x-cloak class="settings-section mb-4">
+    <header>
+      <div>
+        <h2>Add asset</h2>
+        <p class="settings-section__lede">Link a URI (image, video, or web page) to this player's playlist.</p>
+      </div>
+    </header>
+    <form method="post" action="{% url 'anthias_fleet:player_asset_create' player.id %}"
+      hx-post="{% url 'anthias_fleet:player_asset_create' player.id %}"
+      hx-target="#player-asset-table" hx-swap="outerHTML" class="app-form-grid">
+      {% csrf_token %}
+      <div class="app-floating">
+        <input type="url" class="app-input" id="asset_uri" name="uri" placeholder=" " required>
+        <label for="asset_uri">URI</label>
+      </div>
+      <div class="app-floating">
+        <input type="text" class="app-input" id="asset_name" name="name" placeholder=" ">
+        <label for="asset_name">Name (optional)</label>
+      </div>
+      <div class="app-floating">
+        <select class="app-select" id="asset_mimetype" name="mimetype">
+          <option value="webpage">Web page</option>
+          <option value="image">Image</option>
+          <option value="video">Video</option>
+        </select>
+        <label for="asset_mimetype">Type</label>
+      </div>
+      <div class="app-floating">
+        <input type="number" class="app-input" id="asset_duration" name="duration" value="10" min="0" placeholder=" ">
+        <label for="asset_duration">Duration (seconds)</label>
+      </div>
+      <button type="submit" class="app-btn app-btn-primary">
+        <i class="ti ti-check"></i><span>Add</span>
+      </button>
+    </form>
+  </div>
+
+  {% include "fleet/_player_asset_table.html" %}
+
+  {% include "fleet/_player_bulk_action_bar.html" %}
+</div>
+{% endblock %}

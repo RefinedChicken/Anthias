@@ -1,0 +1,116 @@
+{% load humanize %}
+{% comment %} Player table partial. Polled every ~12s by the wrapper's
+   hx-get/hx-trigger pair — this refreshes the *display* of DB state
+   that the fleet's Celery heartbeat poller keeps current in the
+   background (Player.is_reachable / last_reachability_check / etc.);
+   it never calls out to a player over HTTP itself. Every write
+   endpoint that changes a Player row also redirects back through this
+   same partial's parent page, mirroring _asset_table.html's
+   hx-swap="outerHTML" self-replacement contract. {% endcomment %}
+<div
+  id="player-table"
+  hx-get="{% url 'anthias_fleet:player_table' %}"
+  hx-trigger="every 12s"
+  hx-swap="outerHTML"
+  class="surface"
+>
+  <div
+    x-init="syncSelection([{% for player in players %}{{ player.id }}{% if not forloop.last %},{% endif %}{% endfor %}])"
+    hidden
+  ></div>
+
+  <header class="surface__header">
+    <div class="surface__header-left">
+      {% if players %}
+      <label class="asset-select asset-select--all" title="Select all players">
+        <input type="checkbox" class="app-check-input"
+          :checked="allSelected([{% for player in players %}{{ player.id }}{% if not forloop.last %},{% endif %}{% endfor %}])"
+          @change="toggleAll([{% for player in players %}{{ player.id }}{% if not forloop.last %},{% endif %}{% endfor %}], $event.target.checked)"
+          x-effect="$el.indeterminate = someSelected([{% for player in players %}{{ player.id }}{% if not forloop.last %},{% endif %}{% endfor %}])"
+          aria-label="Select all players">
+      </label>
+      {% endif %}
+      <h2><i class="ti ti-devices mr-2"></i>Players</h2>
+    </div>
+    <span class="surface__count">{{ players|length }} player{{ players|length|pluralize }}</span>
+  </header>
+
+  {% if players %}
+  <table class="asset-table">
+    <thead>
+      <tr>
+        <th scope="col" class="asset-select-col"><span class="sr-only">Select</span></th>
+        <th scope="col">Name</th>
+        <th scope="col">Group</th>
+        <th scope="col">Status</th>
+        <th scope="col">Last seen</th>
+        <th scope="col">Device</th>
+        <th scope="col" class="text-right">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for player in players %}
+      <tr :class="isSelected({{ player.id }}) && 'is-selected'">
+        <td class="asset-select-col" data-label="Select" data-no-label>
+          <label class="asset-select">
+            <input type="checkbox" class="app-check-input"
+              :checked="isSelected({{ player.id }})"
+              @change="toggle({{ player.id }})"
+              aria-label="Select {{ player.name|escape }}">
+          </label>
+        </td>
+        <td data-label="Name">
+          <a href="{% url 'anthias_fleet:player_detail' player.id %}">{{ player.name }}</a>
+          <div class="muted-label">{{ player.base_url }}</div>
+        </td>
+        <td data-label="Group">{{ player.group.name|default:"—" }}</td>
+        <td data-label="Status">
+          {% if player.is_reachable %}
+          <span class="inline-flex items-center gap-1" style="color:#2f9e44">
+            <i class="ti ti-circle-filled" style="font-size:.55rem"></i>Online
+          </span>
+          {% else %}
+          <span class="inline-flex items-center gap-1" style="color:#e03131">
+            <i class="ti ti-circle-filled" style="font-size:.55rem"></i>Offline
+          </span>
+          {% endif %}
+          {% if player.last_error %}
+          <div class="muted-label" title="{{ player.last_error }}">{{ player.last_error|truncatechars:40 }}</div>
+          {% endif %}
+        </td>
+        <td data-label="Last seen">
+          {% if player.last_reachability_check %}{{ player.last_reachability_check|naturaltime }}{% else %}Never{% endif %}
+        </td>
+        <td data-label="Device">
+          {{ player.device_model|default:"—" }}
+          {% if player.anthias_version %}<div class="muted-label">{{ player.anthias_version }}</div>{% endif %}
+        </td>
+        <td class="text-right" data-label="Actions">
+          <div class="action-group">
+            <a href="{% url 'anthias_fleet:player_edit' player.id %}" class="app-btn app-btn-icon" title="Edit">
+              <i class="ti ti-pencil"></i>
+            </a>
+            <form method="post" action="{% url 'anthias_fleet:player_delete' player.id %}" class="inline m-0"
+              onsubmit="return confirm('Remove {{ player.name|escapejs }} from the fleet? This does not affect the player device itself.')">
+              {% csrf_token %}
+              <button type="submit" class="app-btn app-btn-icon" title="Remove">
+                <i class="ti ti-trash"></i>
+              </button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-state__icon"><i class="ti ti-devices"></i></div>
+    <p class="empty-state__title">No players yet</p>
+    <p class="empty-state__description">Register a player to start managing it from this console.</p>
+    <a href="{% url 'anthias_fleet:player_new' %}" class="empty-state__action">
+      <i class="ti ti-plus mr-1"></i>Add Player
+    </a>
+  </div>
+  {% endif %}
+</div>

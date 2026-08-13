@@ -1,0 +1,92 @@
+{% comment %} Floating fleet-wide bulk-action bar. Shown whenever one or
+   more player rows are selected (parent x-data in player_list.html).
+   Unlike the player app's asset bulk bar, these actions (reboot /
+   shutdown / display power) are full POST-redirect-GET — there's no
+   htmx partial to swap back into, the outcome is a per-player
+   success/failure summary reported via Django messages (see
+   views.players_bulk_action). {% endcomment %}
+<div
+  class="bulk-bar"
+  x-show="selected.length"
+  x-cloak
+  x-transition.opacity
+  role="region"
+  aria-label="Bulk player actions"
+>
+  <div class="bulk-bar__inner">
+    <div class="bulk-bar__count">
+      <i class="ti ti-checkbox"></i>
+      <span><strong x-text="selected.length"></strong>
+        <span x-text="selected.length === 1 ? 'player' : 'players'"></span>
+        selected</span>
+    </div>
+
+    <div class="bulk-bar__actions">
+      <form method="post" action="{% url 'anthias_fleet:players_bulk_action' %}" class="inline m-0">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="display_on">
+        <input type="hidden" name="ids" :value="selected.join(',')">
+        <button type="submit" class="app-btn app-btn-light app-btn-pill">
+          <i class="ti ti-bulb"></i><span>Display on</span>
+        </button>
+      </form>
+
+      <form method="post" action="{% url 'anthias_fleet:players_bulk_action' %}" class="inline m-0">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="display_off">
+        <input type="hidden" name="ids" :value="selected.join(',')">
+        <button type="submit" class="app-btn app-btn-light app-btn-pill">
+          <i class="ti ti-bulb-off"></i><span>Display off</span>
+        </button>
+      </form>
+
+      <button type="button" class="app-btn app-btn-outline-dark app-btn-pill" @click="pendingAction = 'reboot'">
+        <i class="ti ti-rotate-clockwise"></i><span>Reboot</span>
+      </button>
+
+      <button type="button" class="app-btn app-btn-danger app-btn-pill" @click="pendingAction = 'shutdown'">
+        <i class="ti ti-power"></i><span>Shutdown</span>
+      </button>
+
+      <button type="button" class="app-btn app-btn-icon bulk-bar__clear" @click="clearSelection()" title="Clear selection" aria-label="Clear selection">
+        <i class="ti ti-x"></i>
+      </button>
+    </div>
+  </div>
+</div>
+
+{% comment %}Reboot/shutdown confirmation — same modal-overlay shell as settings.html's system-controls prompt.{% endcomment %}
+<div
+  x-show="pendingAction"
+  x-cloak
+  class="modal-overlay"
+  style="z-index: 1060"
+  @keydown.escape.window="pendingAction = null"
+  @click.self="pendingAction = null"
+>
+  <div class="modal-card modal-card--sm">
+    <div class="modal-card__header">
+      <h2 x-text="pendingAction === 'reboot' ? 'Reboot selected players?' : 'Shut down selected players?'"></h2>
+      <button type="button" class="modal-card__close" @click="pendingAction = null" aria-label="Close">
+        <i class="ti ti-x"></i>
+      </button>
+    </div>
+    <div class="modal-card__body">
+      <p class="m-0">
+        This will <span x-text="pendingAction"></span>
+        <strong x-text="selected.length"></strong>
+        <span x-text="selected.length === 1 ? 'player' : 'players'"></span>.
+        Players that are unreachable will be reported separately and left unaffected.
+      </p>
+    </div>
+    <div class="modal-card__footer">
+      <button type="button" class="app-btn app-btn-link" @click="pendingAction = null">Cancel</button>
+      <form method="post" action="{% url 'anthias_fleet:players_bulk_action' %}" class="inline m-0">
+        {% csrf_token %}
+        <input type="hidden" name="action" :value="pendingAction">
+        <input type="hidden" name="ids" :value="selected.join(',')">
+        <button type="submit" class="app-btn app-btn-danger" x-text="pendingAction === 'reboot' ? 'Reboot now' : 'Shut down'"></button>
+      </form>
+    </div>
+  </div>
+</div>

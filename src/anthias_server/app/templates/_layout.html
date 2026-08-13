@@ -2,11 +2,20 @@
 {% load static %}
 
 {% block content %}
-{% include "_navbar.html" %}
+{% include navbar_template|default:"_navbar.html" %}
 <main>
   {% block main %}{% endblock %}
 </main>
 {% include "_footer.html" %}
 {% include "_toasts.html" %}
-{% include "_review_cta.html" %}
+{% comment %} The review CTA is an asset-add nudge tied to
+   views._maybe_offer_review_cta / the 'review-cta' HX-Trigger event,
+   neither of which the fleet console fires — and it links
+   'anthias_app:review_cta_dismiss' / 'anthias_app:review_cta_snooze',
+   which don't resolve under the fleet ROOT_URLCONF (no 'anthias_app'
+   namespace there), so including it unconditionally would raise
+   NoReverseMatch on every fleet page. navbar_template is only ever set
+   by fleet views, so gating on it here is equivalent to "player app
+   pages only" without a second context flag. {% endcomment %}
+{% if not navbar_template %}{% include "_review_cta.html" %}{% endif %}
 {% endblock %}

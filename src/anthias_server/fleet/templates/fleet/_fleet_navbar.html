@@ -1,0 +1,55 @@
+{% load static %}
+{% comment %} Fleet-console navbar. Mirrors anthias_server/app/templates/_navbar.html's
+   markup/CSS classes (app-nav, app-tab-item, app-tab-link, active_nav,
+   the mobile x-data toggle) so the fleet console reads as the same
+   product, but links to anthias_fleet: routes instead of anthias_app:
+   ones. {% endcomment %}
+<nav class="app-nav fixed top-0 inset-x-0 z-50" x-data="{ open: false }">
+  <div class="app-container flex flex-wrap items-center gap-3 py-3">
+    <a href="{% url 'anthias_fleet:player_list' %}" class="app-nav-brand">
+      <img src="{% static 'img/logo-full.svg' %}" alt="Anthias Fleet">
+    </a>
+
+    <button
+      class="app-nav-toggler ml-auto lg:hidden"
+      type="button"
+      :aria-expanded="open"
+      aria-controls="navbarNav"
+      aria-label="Toggle navigation"
+      @click="open = !open"
+    >
+      <i class="ti ti-menu-2"></i>
+    </button>
+
+    {# Desktop: always visible. Mobile: show only when open. #}
+    <div
+      class="basis-full lg:basis-auto lg:ml-auto"
+      :class="open ? 'block' : 'hidden lg:block'"
+      id="navbarNav"
+    >
+      <ul class="app-nav-items flex flex-col lg:flex-row lg:items-center lg:gap-1">
+        <li class="app-tab-item">
+          <a
+            href="{% url 'anthias_fleet:player_list' %}"
+            class="app-tab-link {% if active_nav == 'players' %}active{% endif %}"
+            @click="open = false"
+          >
+            <i class="ti ti-devices"></i>
+            <span>Players</span>
+          </a>
+        </li>
+
+        <li class="app-tab-item">
+          <a
+            href="{% url 'anthias_fleet:group_list' %}"
+            class="app-tab-link {% if active_nav == 'groups' %}active{% endif %}"
+            @click="open = false"
+          >
+            <i class="ti ti-folders"></i>
+            <span>Groups</span>
+          </a>
+        </li>
+      </ul>
+    </div>
+  </div>
+</nav>

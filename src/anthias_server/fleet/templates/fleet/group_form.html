@@ -1,0 +1,40 @@
+{% extends "_layout.html" %}
+
+{% block title %}Fleet · {% if group %}Edit {{ group.name }}{% else %}Add Group{% endif %}{% endblock %}
+
+{% block main %}
+<div class="app-container">
+  <div class="page-header-bar">
+    <div class="page-header-bar__title">
+      <h1 class="page-header">{% if group %}Edit {{ group.name }}{% else %}Add Group{% endif %}</h1>
+    </div>
+  </div>
+
+  <form
+    method="post"
+    action="{% if group %}{% url 'anthias_fleet:group_edit' group.id %}{% else %}{% url 'anthias_fleet:group_new' %}{% endif %}"
+    class="settings-stack"
+  >
+    {% csrf_token %}
+    <section class="settings-section">
+      <div class="app-floating mb-4">
+        <input type="text" class="app-input" id="name" name="name" placeholder=" " required
+          value="{% if group %}{{ group.name }}{% else %}{{ form_values.name|default:'' }}{% endif %}">
+        <label for="name">Name</label>
+      </div>
+      <div class="app-floating">
+        <input type="text" class="app-input" id="description" name="description" placeholder=" "
+          value="{% if group %}{{ group.description }}{% else %}{{ form_values.description|default:'' }}{% endif %}">
+        <label for="description">Description (optional)</label>
+      </div>
+    </section>
+
+    <div class="flex justify-end gap-2">
+      <a href="{% url 'anthias_fleet:group_list' %}" class="app-btn app-btn-link">Cancel</a>
+      <button type="submit" class="app-btn app-btn-primary">
+        <i class="ti ti-check"></i><span>{% if group %}Save changes{% else %}Create group{% endif %}</span>
+      </button>
+    </div>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,117 @@
+{% load asset_filters %}
+{% comment %} Player drill-down asset table. Adapted from (not a verbatim
+   include of) anthias_server/app/templates/_asset_table.html /
+   _asset_row.html: those hardcode `{% url 'anthias_app:...' %}` calls
+   with no player_id parameter, which can't resolve for a route family
+   that's scoped under players/<int:player_id>/assets/... here — so a
+   verbatim reuse wasn't possible without generalising the shared
+   player templates (risking a regression there). This file mirrors
+   their markup/CSS classes/Alpine structure closely and reuses the
+   *same* asset_filters template filters (schedule_pills,
+   schedule_window, humanize_duration) and Asset.is_active()/
+   get_play_days() methods — both work unchanged against the
+   transient (unsaved) Asset instances adapters.asset_from_player_dict
+   builds from the player's JSON, since they're plain attribute/getattr
+   reads.
+
+   Unlike the player app's own 5s poll (cheap local DB read), every
+   poll of this partial makes a live outbound HTTP call to the actual
+   player (PlayerAPIClient.list_assets()) — a slower ~15s interval
+   keeps that reasonable. {% endcomment %}
+<div
+  id="player-asset-table"
+  hx-get="{% url 'anthias_fleet:player_assets_table' player.id %}"
+  hx-trigger="every 15s"
+  hx-swap="outerHTML"
+  class="flex flex-col gap-4"
+>
+  <div x-init="syncSelection({{ active_assets|asset_ids }}, {{ inactive_assets|asset_ids }})" hidden></div>
+
+  <section id="player-active-assets-section" class="surface surface--active">
+    <header class="surface__header">
+      <div class="surface__header-left">
+        {% if active_assets %}
+        <label class="asset-select asset-select--all" title="Select all enabled">
+          <input type="checkbox" class="app-check-input"
+            :checked="allSelected({{ active_assets|asset_ids }})"
+            @change="toggleAll({{ active_assets|asset_ids }}, $event.target.checked)"
+            x-effect="$el.indeterminate = someSelected({{ active_assets|asset_ids }})"
+            aria-label="Select all enabled assets">
+        </label>
+        {% endif %}
+        <h2><i class="ti ti-toggle-right mr-2"></i>Enabled</h2>
+      </div>
+      <span class="surface__count">{{ active_assets|length }} item{{ active_assets|length|pluralize }}</span>
+    </header>
+
+    {% if active_assets %}
+    <table class="asset-table">
+      <thead>
+        <tr>
+          <th scope="col" class="asset-select-col"><span class="sr-only">Select</span></th>
+          <th scope="col">Name</th>
+          <th scope="col" style="width: 28%">Schedule window</th>
+          <th scope="col" style="width: 10%">Duration</th>
+          <th scope="col" style="width: 8%">Enabled</th>
+          <th scope="col" style="width: 16%" class="text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for asset in active_assets %}
+        {% include "fleet/_player_asset_row.html" with asset=asset is_active=True forloop_first=forloop.first forloop_last=forloop.last %}
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-state__icon"><i class="ti ti-playlist"></i></div>
+      <p class="empty-state__title">No active assets</p>
+      <p class="empty-state__description">Assets you enable appear here and play on this player.</p>
+    </div>
+    {% endif %}
+  </section>
+
+  <section id="player-inactive-assets-section" class="surface">
+    <header class="surface__header">
+      <div class="surface__header-left">
+        {% if inactive_assets %}
+        <label class="asset-select asset-select--all" title="Select all inactive">
+          <input type="checkbox" class="app-check-input"
+            :checked="allSelected({{ inactive_assets|asset_ids }})"
+            @change="toggleAll({{ inactive_assets|asset_ids }}, $event.target.checked)"
+            x-effect="$el.indeterminate = someSelected({{ inactive_assets|asset_ids }})"
+            aria-label="Select all inactive assets">
+        </label>
+        {% endif %}
+        <h2><i class="ti ti-player-pause mr-2"></i>Inactive</h2>
+      </div>
+      <span class="surface__count">{{ inactive_assets|length }} item{{ inactive_assets|length|pluralize }}</span>
+    </header>
+
+    {% if inactive_assets %}
+    <table class="asset-table">
+      <thead>
+        <tr>
+          <th scope="col" class="asset-select-col"><span class="sr-only">Select</span></th>
+          <th scope="col">Name</th>
+          <th scope="col" style="width: 28%">Schedule window</th>
+          <th scope="col" style="width: 10%">Duration</th>
+          <th scope="col" style="width: 8%">Enabled</th>
+          <th scope="col" style="width: 16%" class="text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for asset in inactive_assets %}
+        {% include "fleet/_player_asset_row.html" with asset=asset is_active=False forloop_first=forloop.first forloop_last=forloop.last %}
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-state__icon"><i class="ti ti-archive"></i></div>
+      <p class="empty-state__title">No inactive assets</p>
+      <p class="empty-state__description">Assets you disable — or that haven't been enabled yet — appear here.</p>
+    </div>
+    {% endif %}
+  </section>
+</div>
