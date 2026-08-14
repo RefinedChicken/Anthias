@@ -45,6 +45,16 @@ urlpatterns = [
         views.api_tokens_revoke,
         name='api_tokens_revoke',
     ),
+    path(
+        'settings/fleet-pairing/create/',
+        views.fleet_pairing_create,
+        name='fleet_pairing_create',
+    ),
+    path(
+        'settings/fleet-pairing/revoke/',
+        views.fleet_pairing_revoke,
+        name='fleet_pairing_revoke',
+    ),
     path('settings/users/create/', views.user_create, name='user_create'),
     path(
         'settings/users/<int:user_id>/edit/',

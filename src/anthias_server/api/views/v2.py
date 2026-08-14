@@ -616,6 +616,35 @@ class DeviceSettingsViewV2(APIView):
     )
     @authorized
     def patch(self, request: Request) -> Response:
+        # While this player is fleet-managed, device settings are the
+        # fleet console's to write — only a request authenticated with
+        # *that specific* paired token may PATCH here; every other
+        # caller (a different bearer token, a session, Basic auth) is
+        # rejected outright, matching the local HTML settings_save()
+        # view's field-skipping for the same fields (see its
+        # docstring). AnthiasAPITokenAuthentication sets request.auth
+        # to the matched AnthiasAPIToken row on a bearer-authenticated
+        # request and leaves it None for session/Basic — that's the
+        # whole distinction this check needs, no new auth plumbing.
+        from anthias_server.api.models import AnthiasAPIToken
+        from anthias_server.lib.auth import fleet_management_token
+
+        fleet_token = fleet_management_token()
+        if fleet_token is not None and (
+            not isinstance(request.auth, AnthiasAPIToken)
+            or request.auth.pk != fleet_token.pk
+        ):
+            return Response(
+                {
+                    'error': (
+                        'This player is managed by a fleet server; '
+                        'device settings can only be changed from '
+                        'there while paired.'
+                    )
+                },
+                status=403,
+            )
+
         try:
             serializer = UpdateDeviceSettingsSerializerV2(data=request.data)
             if not serializer.is_valid():

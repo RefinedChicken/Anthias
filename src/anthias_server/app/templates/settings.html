@@ -21,8 +21,24 @@
   >
     {% csrf_token %}
 
+    {% if is_fleet_managed %}
+    {% comment %}
+      settings_save() ignores these two sections' fields entirely while
+      fleet-managed (see its docstring) — the disabled attributes here
+      are the honest UI reflection of that server-side rule, not the
+      enforcement itself. Edit from the fleet console's Player Settings
+      panel instead, which writes via DeviceSettingsViewV2.patch using
+      the paired token.
+    {% endcomment %}
+    <p class="settings-section__lede mb-0">
+      <i class="ti ti-lock"></i>
+      Managed by fleet server — player name and display/playback settings
+      are edited from the fleet console instead. <a href="#fleet-management">Unpair</a> to manage them here again.
+    </p>
+    {% endif %}
+
     {# ===== Player identity ===== #}
-    <section class="settings-section">
+    <section class="settings-section" {% if is_fleet_managed %}aria-disabled="true"{% endif %}>
       <header>
         <div>
           <h2>Player identity</h2>
@@ -30,13 +46,13 @@
         </div>
       </header>
       <div class="app-floating">
-        <input type="text" class="app-input" id="player_name" name="player_name" value="{{ player_name }}" placeholder=" ">
+        <input type="text" class="app-input" id="player_name" name="player_name" value="{{ player_name }}" placeholder=" " {% if is_fleet_managed %}disabled{% endif %}>
         <label for="player_name">Player name</label>
       </div>
     </section>
 
     {# ===== Display & playback ===== #}
-    <section class="settings-section">
+    <section class="settings-section" {% if is_fleet_managed %}aria-disabled="true"{% endif %}>
       <header>
         <div>
           <h2>Display & playback</h2>
@@ -46,18 +62,18 @@
 
       <div class="app-form-grid mb-4">
         <div class="app-floating">
-          <input type="number" class="app-input" id="default_duration" name="default_duration" value="{{ default_duration }}" placeholder=" " required>
+          <input type="number" class="app-input" id="default_duration" name="default_duration" value="{{ default_duration }}" placeholder=" " required {% if is_fleet_managed %}disabled{% endif %}>
           <label for="default_duration">Default duration (seconds)</label>
         </div>
         <div class="app-floating">
-          <input type="number" class="app-input" id="default_streaming_duration" name="default_streaming_duration" value="{{ default_streaming_duration }}" placeholder=" " required>
+          <input type="number" class="app-input" id="default_streaming_duration" name="default_streaming_duration" value="{{ default_streaming_duration }}" placeholder=" " required {% if is_fleet_managed %}disabled{% endif %}>
           <label for="default_streaming_duration">Default streaming duration (seconds)</label>
         </div>
       </div>
 
       <div class="app-form-grid mb-4">
         <div class="app-floating">
-          <select class="app-select" id="audio_output" name="audio_output">
+          <select class="app-select" id="audio_output" name="audio_output" {% if is_fleet_managed %}disabled{% endif %}>
             <option value="hdmi" {% if audio_output == 'hdmi' %}selected{% endif %}>HDMI</option>
             {% if not is_pi5 %}
             <option value="local" {% if audio_output == 'local' %}selected{% endif %}>3.5mm jack</option>
@@ -67,7 +83,7 @@
         </div>
 
         <div class="app-floating">
-          <select class="app-select" id="date_format" name="date_format">
+          <select class="app-select" id="date_format" name="date_format" {% if is_fleet_managed %}disabled{% endif %}>
             {% for value, label in date_format_options %}
             <option value="{{ value }}" {% if date_format == value %}selected{% endif %}>{{ label }}</option>
             {% endfor %}
@@ -76,7 +92,7 @@
         </div>
 
         <div class="app-floating">
-          <select class="app-select" id="timezone" name="timezone">
+          <select class="app-select" id="timezone" name="timezone" {% if is_fleet_managed %}disabled{% endif %}>
             {% for value, label in timezone_options %}
             <option value="{{ value }}" {% if timezone == value %}selected{% endif %}>{{ label }}</option>
             {% endfor %}
@@ -85,7 +101,7 @@
         </div>
 
         <div class="app-floating">
-          <select class="app-select" id="screen_rotation" name="screen_rotation">
+          <select class="app-select" id="screen_rotation" name="screen_rotation" {% if is_fleet_managed %}disabled{% endif %}>
             <option value="0" {% if screen_rotation == 0 %}selected{% endif %}>Landscape (0°)</option>
             <option value="90" {% if screen_rotation == 90 %}selected{% endif %}>Portrait (90°)</option>
             <option value="180" {% if screen_rotation == 180 %}selected{% endif %}>Landscape, inverted (180°)</option>
@@ -96,13 +112,13 @@
       </div>
 
       <div>
-        {% include "_settings_toggle.html" with name="show_splash" label="Show splash screen" hint="Display the device's IP address on screen at boot." checked=show_splash %}
-        {% include "_settings_toggle.html" with name="default_assets" label="Include default sample assets" hint="Auto-add the bundled sample assets to a fresh playlist." checked=default_assets %}
-        {% include "_settings_toggle.html" with name="shuffle_playlist" label="Shuffle playlist" hint="Randomise the play order on every loop." checked=shuffle_playlist %}
-        {% include "_settings_toggle.html" with name="prefer_dark_mode" label="Prefer dark mode" hint="Ask web page assets to render in dark mode where they support it." checked=prefer_dark_mode %}
-        {% include "_settings_toggle.html" with name="use_24_hour_clock" label="Use 24-hour clock" hint="Display times in 24-hour format across the UI." checked=use_24_hour_clock %}
-        {% include "_settings_toggle.html" with name="debug_logging" label="Debug logging" hint="Verbose viewer logs. Leave off unless you're chasing a problem." checked=debug_logging %}
-        {% include "_settings_toggle.html" with name="verify_ssl" label="Verify SSL certificates" hint="Keep on. Turn off only to allow media or web pages served over HTTPS with a self-signed or untrusted certificate (e.g. an intranet host). Disables certificate checks device-wide." checked=verify_ssl %}
+        {% include "_settings_toggle.html" with name="show_splash" label="Show splash screen" hint="Display the device's IP address on screen at boot." checked=show_splash disabled=is_fleet_managed %}
+        {% include "_settings_toggle.html" with name="default_assets" label="Include default sample assets" hint="Auto-add the bundled sample assets to a fresh playlist." checked=default_assets disabled=is_fleet_managed %}
+        {% include "_settings_toggle.html" with name="shuffle_playlist" label="Shuffle playlist" hint="Randomise the play order on every loop." checked=shuffle_playlist disabled=is_fleet_managed %}
+        {% include "_settings_toggle.html" with name="prefer_dark_mode" label="Prefer dark mode" hint="Ask web page assets to render in dark mode where they support it." checked=prefer_dark_mode disabled=is_fleet_managed %}
+        {% include "_settings_toggle.html" with name="use_24_hour_clock" label="Use 24-hour clock" hint="Display times in 24-hour format across the UI." checked=use_24_hour_clock disabled=is_fleet_managed %}
+        {% include "_settings_toggle.html" with name="debug_logging" label="Debug logging" hint="Verbose viewer logs. Leave off unless you're chasing a problem." checked=debug_logging disabled=is_fleet_managed %}
+        {% include "_settings_toggle.html" with name="verify_ssl" label="Verify SSL certificates" hint="Keep on. Turn off only to allow media or web pages served over HTTPS with a self-signed or untrusted certificate (e.g. an intranet host). Disables certificate checks device-wide." checked=verify_ssl disabled=is_fleet_managed %}
       </div>
     </section>
 
@@ -373,6 +389,73 @@
         </div>
       </div>
     </div>
+    {% endif %}
+  </section>
+
+  {# ===== Fleet Management ===== #}
+  <section class="settings-section mt-4" id="fleet-management" x-data="{ showNewPairingToken: {{ new_fleet_pairing_token|yesno:'true,false' }}, confirmingUnpair: false }">
+    <header>
+      <div>
+        <h2>Fleet Management</h2>
+        <p class="settings-section__lede">Let a fleet-management server control this player from a single console instead of this local UI.</p>
+      </div>
+    </header>
+
+    {% if is_fleet_managed %}
+    <div class="settings-section__row">
+      <div>
+        <strong><i class="ti ti-circle-check-filled" style="color:#2f9e44"></i> Paired</strong>
+        <p class="settings-section__lede">
+          Paired since {{ fleet_management_token.created_at }}.
+          Last contacted {{ fleet_management_token.last_used_at|default:"never yet" }}.
+          Player name and Display &amp; playback settings above are locked while paired.
+        </p>
+      </div>
+      <div class="settings-section__actions">
+        <div x-show="!confirmingUnpair">
+          <button type="button" class="app-btn app-btn-danger" @click="confirmingUnpair = true">
+            <i class="ti ti-plug-x"></i><span>Unpair</span>
+          </button>
+        </div>
+        <form x-show="confirmingUnpair" x-cloak method="post" action="{% url 'anthias_app:fleet_pairing_revoke' %}" class="flex items-center gap-2 m-0">
+          {% csrf_token %}
+          <span class="muted-label">Unpair? Locked settings unlock immediately.</span>
+          <button type="submit" class="app-btn app-btn-danger">Yes, unpair</button>
+          <button type="button" class="app-btn app-btn-link" @click="confirmingUnpair = false">Cancel</button>
+        </form>
+      </div>
+    </div>
+    {% else %}
+    <p class="settings-section__lede">Not currently paired with a fleet server.</p>
+    <form method="post" action="{% url 'anthias_app:fleet_pairing_create' %}" class="m-0">
+      {% csrf_token %}
+      <button type="submit" class="app-btn app-btn-outline-dark">
+        <i class="ti ti-plug"></i><span>Generate pairing token</span>
+      </button>
+    </form>
+
+    {% if new_fleet_pairing_token %}
+    <div x-show="showNewPairingToken" x-cloak class="modal-overlay" @keydown.escape.window="showNewPairingToken = false" @click.self="showNewPairingToken = false">
+      <div class="modal-card modal-card--sm">
+        <div class="modal-card__header">
+          <h2>Copy your pairing token now</h2>
+          <button type="button" class="modal-card__close" @click="showNewPairingToken = false" aria-label="Close">
+            <i class="ti ti-x"></i>
+          </button>
+        </div>
+        <div class="modal-card__body">
+          <p>This is the only time it will be shown. Paste it into the fleet console's "Add Player" form, along with this player's address — it can't be recovered later, only revoked and reissued.</p>
+          <div class="app-floating">
+            <input type="text" class="app-input" id="new_fleet_pairing_token_value" value="{{ new_fleet_pairing_token }}" readonly @focus="$el.select()">
+            <label for="new_fleet_pairing_token_value">Token</label>
+          </div>
+        </div>
+        <div class="modal-card__footer">
+          <button type="button" class="app-btn app-btn-primary" @click="showNewPairingToken = false">Done</button>
+        </div>
+      </div>
+    </div>
+    {% endif %}
     {% endif %}
   </section>
 

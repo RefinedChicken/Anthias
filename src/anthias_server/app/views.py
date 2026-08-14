@@ -48,6 +48,7 @@ from anthias_server.lib.auth import (
     AuthSettingsError,
     apply_self_account_changes,
     authorized,
+    is_fleet_managed,
     require_settings_access,
     require_setup_complete,
 )
@@ -1697,6 +1698,14 @@ def settings_view(request: HttpRequest) -> HttpResponse:
     context['reset_user_password'] = request.session.pop(
         'reset_user_password', None
     )
+
+    from anthias_server.lib.auth import fleet_management_token
+
+    context['fleet_management_token'] = fleet_management_token()
+    context['is_fleet_managed'] = context['fleet_management_token'] is not None
+    context['new_fleet_pairing_token'] = request.session.pop(
+        'new_fleet_pairing_token', None
+    )
     return template(request, 'settings.html', context)
 
 
@@ -1746,44 +1755,63 @@ def settings_save(request: HttpRequest) -> HttpResponse:
             new_pwd_confirm=request.POST.get('password_2', ''),
         )
 
-        settings['player_name'] = request.POST.get('player_name', '')
-        # Clamped for the same reason as the per-asset duration: these
-        # defaults get copied onto new asset rows and would reach the
-        # viewer's Event.wait (Sentry ANTHIAS-3E).
-        settings['default_duration'] = clamp_duration(
-            request.POST.get('default_duration') or 0
-        )
-        settings['default_streaming_duration'] = clamp_duration(
-            request.POST.get('default_streaming_duration') or 0
-        )
-        settings['audio_output'] = request.POST.get('audio_output', 'hdmi')
-        settings['date_format'] = request.POST.get('date_format', 'mm/dd/yyyy')
-        settings['timezone'] = tz_value
+        # Player identity and every display/playback field below are
+        # owned by the fleet console once this player is fleet-managed
+        # (see settings.html's "Fleet Management" section and
+        # DeviceSettingsViewV2.patch's request.auth check, which is the
+        # write path the fleet console actually uses instead of this
+        # form). Skip reading them from POST entirely rather than
+        # relying on the template's disabled-inputs to keep them out of
+        # the body — a disabled input is simply absent from POST, and
+        # request.POST.get('default_duration') or 0 below would zero
+        # the setting out if this block ran anyway.
+        if not is_fleet_managed():
+            settings['player_name'] = request.POST.get('player_name', '')
+            # Clamped for the same reason as the per-asset duration: these
+            # defaults get copied onto new asset rows and would reach the
+            # viewer's Event.wait (Sentry ANTHIAS-3E).
+            settings['default_duration'] = clamp_duration(
+                request.POST.get('default_duration') or 0
+            )
+            settings['default_streaming_duration'] = clamp_duration(
+                request.POST.get('default_streaming_duration') or 0
+            )
+            settings['audio_output'] = request.POST.get('audio_output', 'hdmi')
+            settings['date_format'] = request.POST.get(
+                'date_format', 'mm/dd/yyyy'
+            )
+            settings['timezone'] = tz_value
 
-        new_default_assets = _checkbox(request, 'default_assets')
-        if new_default_assets and not settings['default_assets']:
-            add_default_assets()
-        elif not new_default_assets and settings['default_assets']:
-            remove_default_assets()
-        settings['default_assets'] = new_default_assets
+            new_default_assets = _checkbox(request, 'default_assets')
+            if new_default_assets and not settings['default_assets']:
+                add_default_assets()
+            elif not new_default_assets and settings['default_assets']:
+                remove_default_assets()
+            settings['default_assets'] = new_default_assets
 
-        settings['show_splash'] = _checkbox(request, 'show_splash')
-        settings['shuffle_playlist'] = _checkbox(request, 'shuffle_playlist')
-        settings['prefer_dark_mode'] = _checkbox(request, 'prefer_dark_mode')
-        settings['use_24_hour_clock'] = _checkbox(request, 'use_24_hour_clock')
-        settings['debug_logging'] = _checkbox(request, 'debug_logging')
-        settings['verify_ssl'] = _checkbox(request, 'verify_ssl')
+            settings['show_splash'] = _checkbox(request, 'show_splash')
+            settings['shuffle_playlist'] = _checkbox(
+                request, 'shuffle_playlist'
+            )
+            settings['prefer_dark_mode'] = _checkbox(
+                request, 'prefer_dark_mode'
+            )
+            settings['use_24_hour_clock'] = _checkbox(
+                request, 'use_24_hour_clock'
+            )
+            settings['debug_logging'] = _checkbox(request, 'debug_logging')
+            settings['verify_ssl'] = _checkbox(request, 'verify_ssl')
 
-        # Restrict to the four cardinal angles via the shared
-        # clamp_screen_rotation() helper. The Qt linuxfb plugin only
-        # honors 0/90/180/270 (anything else is silently treated as
-        # 0); wlr-randr rejects non-cardinal --transform values
-        # outright. Going through the helper keeps the HTML form
-        # path, the v2 serializer, and the viewer-side read sites on
-        # exactly the same allowed set.
-        settings['screen_rotation'] = clamp_screen_rotation(
-            request.POST.get('screen_rotation')
-        )
+            # Restrict to the four cardinal angles via the shared
+            # clamp_screen_rotation() helper. The Qt linuxfb plugin only
+            # honors 0/90/180/270 (anything else is silently treated as
+            # 0); wlr-randr rejects non-cardinal --transform values
+            # outright. Going through the helper keeps the HTML form
+            # path, the v2 serializer, and the viewer-side read sites on
+            # exactly the same allowed set.
+            settings['screen_rotation'] = clamp_screen_rotation(
+                request.POST.get('screen_rotation')
+            )
 
         settings.save()
         ViewerPublisher.get_instance().send_to_viewer('reload')
@@ -1988,6 +2016,68 @@ def api_tokens_revoke(request: HttpRequest, token_id: int) -> HttpResponse:
     ).delete()
     (messages.success if deleted else messages.error)(
         request, 'API token revoked.' if deleted else 'Token not found.'
+    )
+    return redirect(reverse('anthias_app:settings'))
+
+
+@require_setup_complete
+@authorized
+@require_settings_access
+@require_http_methods(['POST'])
+def fleet_pairing_create(request: HttpRequest) -> HttpResponse:
+    """Issue the token a fleet-management server pairs with.
+
+    A player is managed by at most one fleet server at a time —
+    generating a new pairing token here replaces (deletes) any
+    existing one rather than accumulating alongside it, matching the
+    single "Unpair" action a paired player shows instead of this form.
+    """
+    from typing import cast
+
+    from django.contrib.auth.models import User as UserModel
+
+    from anthias_server.api.models import AnthiasAPIToken
+    from anthias_server.lib.auth import issue_api_token
+
+    current_user = cast(UserModel, request.user)
+    AnthiasAPIToken.objects.filter(
+        purpose=AnthiasAPIToken.PURPOSE_FLEET_MANAGEMENT
+    ).delete()
+    _, raw_token = issue_api_token(
+        current_user,
+        'Fleet pairing',
+        purpose=AnthiasAPIToken.PURPOSE_FLEET_MANAGEMENT,
+    )
+    # Same one-time-reveal pattern as new_api_token — the fleet
+    # console's "Add Player" form is where this actually gets pasted.
+    request.session['new_fleet_pairing_token'] = raw_token
+    messages.success(
+        request,
+        "Pairing token generated. Paste it into the fleet console's "
+        'Add Player form.',
+    )
+    return redirect(reverse('anthias_app:settings'))
+
+
+@require_setup_complete
+@authorized
+@require_settings_access
+@require_http_methods(['POST'])
+def fleet_pairing_revoke(request: HttpRequest) -> HttpResponse:
+    """Unpair from the fleet server: delete the fleet-management token.
+
+    Local Player Identity / Display & Playback settings unlock again
+    on the very next page load (settings_view / settings_save both key
+    off ``is_fleet_managed()``, which is just "does this token still
+    exist" — there's no separate flag to also clear)."""
+    from anthias_server.api.models import AnthiasAPIToken
+
+    deleted, _ = AnthiasAPIToken.objects.filter(
+        purpose=AnthiasAPIToken.PURPOSE_FLEET_MANAGEMENT
+    ).delete()
+    (messages.success if deleted else messages.error)(
+        request,
+        'Unpaired from fleet server.' if deleted else 'Not currently paired.',
     )
     return redirect(reverse('anthias_app:settings'))
 

@@ -72,6 +72,9 @@
           <i class="ti ti-player-skip-forward"></i><span class="hidden md:inline">Next</span>
         </button>
       </form>
+      <a href="{% url 'anthias_fleet:player_settings' player.id %}" class="app-btn app-btn-outline-dark app-btn-pill">
+        <i class="ti ti-adjustments"></i><span>Player settings</span>
+      </a>
       <a href="{% url 'anthias_fleet:player_edit' player.id %}" class="app-btn app-btn-outline-dark app-btn-pill">
         <i class="ti ti-settings"></i><span>Edit player</span>
       </a>

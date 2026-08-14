@@ -201,12 +201,24 @@ def hash_api_token(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode()).hexdigest()
 
 
-def issue_api_token(user: User, name: str) -> tuple[Any, str]:
+def issue_api_token(
+    user: User, name: str, *, purpose: str = 'general'
+) -> tuple[Any, str]:
     """Create and persist a new ``AnthiasAPIToken`` for ``user``.
 
     Returns ``(token_row, raw_token)`` — the raw value is never stored
     and this is the only place it's ever available; the caller must
     show it to the operator immediately, it can't be recovered later.
+
+    ``purpose='fleet_management'`` marks this as *the* token a fleet
+    server pairs with (see ``is_fleet_managed``/``fleet_management_token``
+    below) — a player is paired with at most one fleet server at a
+    time, so issuing a new fleet-management token replaces any
+    existing one rather than accumulating alongside it. Callers that
+    want that replace-not-accumulate behavior should delete any prior
+    fleet-management token themselves before calling this; kept as the
+    caller's responsibility rather than baked in here so this function
+    stays a plain "create one token" primitive.
     """
     from anthias_server.api.models import AnthiasAPIToken
 
@@ -216,8 +228,23 @@ def issue_api_token(user: User, name: str) -> tuple[Any, str]:
         name=name,
         token_hash=hash_api_token(raw_token),
         prefix=raw_token[:_API_TOKEN_DISPLAY_PREFIX_LEN],
+        purpose=purpose,
     )
     return token_row, raw_token
+
+
+def fleet_management_token() -> Any | None:
+    """The single ``AnthiasAPIToken`` (if any) a fleet server paired
+    with, or ``None`` if this player isn't fleet-managed."""
+    from anthias_server.api.models import AnthiasAPIToken
+
+    return AnthiasAPIToken.objects.filter(
+        purpose=AnthiasAPIToken.PURPOSE_FLEET_MANAGEMENT
+    ).first()
+
+
+def is_fleet_managed() -> bool:
+    return fleet_management_token() is not None
 
 
 # Throttle window for the DEPRECATED-Basic-auth log line. The signal

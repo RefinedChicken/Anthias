@@ -28,6 +28,23 @@ class AnthiasAPIToken(models.Model):
     # recognise *which* token a row is without ever re-displaying the
     # secret itself (GitHub/Stripe personal-access-token convention).
     prefix = models.CharField(max_length=12)
+    # Distinguishes "the token a fleet-management server pairs with"
+    # from every other integration token. This is what lets a player
+    # know it's fleet-managed at all (see lib.auth.is_fleet_managed) —
+    # without this, every AnthiasAPIToken looks identical regardless
+    # of who holds it. At most one token should carry the
+    # fleet_management purpose at a time (issuing a new one replaces
+    # any existing one — see the pairing view), matching the one
+    # player-to-one-fleet-server pairing model.
+    PURPOSE_GENERAL = 'general'
+    PURPOSE_FLEET_MANAGEMENT = 'fleet_management'
+    PURPOSE_CHOICES: ClassVar[list[tuple[str, str]]] = [
+        (PURPOSE_GENERAL, 'General'),
+        (PURPOSE_FLEET_MANAGEMENT, 'Fleet Management'),
+    ]
+    purpose = models.CharField(
+        max_length=32, choices=PURPOSE_CHOICES, default=PURPOSE_GENERAL
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     last_used_at = models.DateTimeField(blank=True, null=True)
     expires_at = models.DateTimeField(blank=True, null=True)

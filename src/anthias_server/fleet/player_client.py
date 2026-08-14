@@ -71,6 +71,21 @@ class PlayerAPIClient:
     def get_info(self) -> dict[str, Any]:
         return cast('dict[str, Any]', self._request('GET', 'info'))
 
+    # --- device settings -----------------------------------------------
+    # Only meaningful for a fleet-paired player — DeviceSettingsViewV2
+    # .patch rejects any other caller's writes once a player is
+    # fleet-managed (the token backing this client must be that
+    # player's own paired token, or the PATCH 403s).
+
+    def get_device_settings(self) -> dict[str, Any]:
+        return cast('dict[str, Any]', self._request('GET', 'device_settings'))
+
+    def update_device_settings(self, data: dict[str, Any]) -> dict[str, Any]:
+        return cast(
+            'dict[str, Any]',
+            self._request('PATCH', 'device_settings', json=data),
+        )
+
     # --- assets -----------------------------------------------------------
 
     def list_assets(self) -> list[dict[str, Any]]:

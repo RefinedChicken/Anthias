@@ -10,6 +10,7 @@ class AnthiasAPITokenAdmin(admin.ModelAdmin[AnthiasAPIToken]):
     list_display = (
         'name',
         'prefix',
+        'purpose',
         'user',
         'created_at',
         'last_used_at',

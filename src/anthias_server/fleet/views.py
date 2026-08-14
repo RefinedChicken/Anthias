@@ -30,7 +30,11 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from anthias_server.app.models import clamp_refresh_interval
-from anthias_server.app.views import _host_allowed, _set_toast_header
+from anthias_server.app.views import (
+    _checkbox,
+    _host_allowed,
+    _set_toast_header,
+)
 from anthias_server.fleet.adapters import asset_from_player_dict
 from anthias_server.fleet.helpers import template
 from anthias_server.fleet.models import Player, PlayerGroup
@@ -334,6 +338,94 @@ def player_detail(request: HttpRequest, player_id: int) -> HttpResponse:
     player = get_object_or_404(Player, pk=player_id)
     return template(
         request, 'fleet/player_detail.html', _player_detail_context(player)
+    )
+
+
+# Fields proxied to/from a player's own v2/device_settings — deliberately
+# the same set settings.html locks locally when a player is
+# fleet-managed (see that template's "Fleet Management" section and
+# app.views.settings_save's docstring). auth_backend/username/password
+# are NOT in this set: user-account management always stays local per
+# the confirmed design decision, so this panel never touches it.
+_PLAYER_SETTINGS_TEXT_FIELDS = (
+    'player_name',
+    'audio_output',
+    'date_format',
+    'timezone',
+)
+_PLAYER_SETTINGS_INT_FIELDS = (
+    'default_duration',
+    'default_streaming_duration',
+    'screen_rotation',
+)
+_PLAYER_SETTINGS_BOOL_FIELDS = (
+    'show_splash',
+    'default_assets',
+    'shuffle_playlist',
+    'use_24_hour_clock',
+    'debug_logging',
+    'prefer_dark_mode',
+    'verify_ssl',
+)
+
+
+@authorized
+@require_http_methods(['GET', 'POST'])
+def player_settings(request: HttpRequest, player_id: int) -> HttpResponse:
+    """Remote equivalent of the player's own Display & Playback /
+    Player Identity settings — what a fleet-managed player's local
+    Settings page points operators here for instead. Proxies straight
+    to that player's own v2/device_settings; there's no local copy of
+    these values in the fleet DB to drift out of sync."""
+    player = get_object_or_404(Player, pk=player_id)
+    client = PlayerAPIClient(player)
+
+    if request.method == 'POST':
+        data: dict[str, Any] = {}
+        for field in _PLAYER_SETTINGS_TEXT_FIELDS:
+            if field in request.POST:
+                data[field] = request.POST.get(field, '')
+        for field in _PLAYER_SETTINGS_INT_FIELDS:
+            raw = request.POST.get(field)
+            if raw is not None and raw != '':
+                try:
+                    data[field] = int(raw)
+                except ValueError:
+                    messages.error(request, f'"{field}" must be a number.')
+                    return redirect(
+                        reverse(
+                            'anthias_fleet:player_settings', args=[player.pk]
+                        )
+                    )
+        for field in _PLAYER_SETTINGS_BOOL_FIELDS:
+            data[field] = _checkbox(request, field)
+
+        try:
+            client.update_device_settings(data)
+        except (PlayerUnreachableError, PlayerAPIError) as exc:
+            messages.error(request, _client_error_message(exc))
+        else:
+            messages.success(request, f'Updated settings for "{player.name}".')
+        return redirect(
+            reverse('anthias_fleet:player_settings', args=[player.pk])
+        )
+
+    try:
+        device_settings = client.get_device_settings()
+        fetch_error: str | None = None
+    except (PlayerUnreachableError, PlayerAPIError) as exc:
+        device_settings = {}
+        fetch_error = _client_error_message(exc)
+
+    return template(
+        request,
+        'fleet/player_settings.html',
+        {
+            'player': player,
+            'device_settings': device_settings,
+            'fetch_error': fetch_error,
+            'active_nav': 'players',
+        },
     )
 
 

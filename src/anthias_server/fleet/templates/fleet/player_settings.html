@@ -1,0 +1,118 @@
+{% extends "_layout.html" %}
+{% load static %}
+
+{% block title %}Fleet · {{ player.name }} · Settings{% endblock %}
+
+{% block main %}
+<div class="app-container">
+  <div class="page-header-bar">
+    <div class="page-header-bar__title">
+      <h1 class="page-header">{{ player.name }} settings</h1>
+      <p class="page-header-bar__lede">
+        Remote equivalent of this player's own Player Identity / Display &amp; Playback
+        settings — proxied live to <a href="{% url 'anthias_fleet:player_detail' player.id %}">{{ player.base_url }}</a>,
+        nothing is cached here. User accounts always stay managed on the player itself.
+      </p>
+    </div>
+    <div class="page-header-bar__actions">
+      <a href="{% url 'anthias_fleet:player_detail' player.id %}" class="app-btn app-btn-outline-dark app-btn-pill">
+        <i class="ti ti-arrow-left"></i><span>Back to player</span>
+      </a>
+    </div>
+  </div>
+
+  {% comment %}Flash messages are emitted as toasts by _toasts.html (vendor.ts drainDjangoMessages()).{% endcomment %}
+
+  {% if fetch_error %}
+  <div class="error-card mb-4">
+    <i class="ti ti-alert-triangle"></i>
+    <span>{{ fetch_error }}</span>
+  </div>
+  {% else %}
+  <form method="post" action="{% url 'anthias_fleet:player_settings' player.id %}" class="settings-stack">
+    {% csrf_token %}
+
+    {# ===== Player identity ===== #}
+    <section class="settings-section">
+      <header>
+        <div>
+          <h2>Player identity</h2>
+          <p class="settings-section__lede">A friendly name shown in this player's own UI and page title.</p>
+        </div>
+      </header>
+      <div class="app-floating">
+        <input type="text" class="app-input" id="player_name" name="player_name" value="{{ device_settings.player_name }}" placeholder=" ">
+        <label for="player_name">Player name</label>
+      </div>
+    </section>
+
+    {# ===== Display & playback ===== #}
+    <section class="settings-section">
+      <header>
+        <div>
+          <h2>Display &amp; playback</h2>
+          <p class="settings-section__lede">Defaults, audio, timezone, and display.</p>
+        </div>
+      </header>
+
+      <div class="app-form-grid mb-4">
+        <div class="app-floating">
+          <input type="number" class="app-input" id="default_duration" name="default_duration" value="{{ device_settings.default_duration }}" placeholder=" " required>
+          <label for="default_duration">Default duration (seconds)</label>
+        </div>
+        <div class="app-floating">
+          <input type="number" class="app-input" id="default_streaming_duration" name="default_streaming_duration" value="{{ device_settings.default_streaming_duration }}" placeholder=" " required>
+          <label for="default_streaming_duration">Default streaming duration (seconds)</label>
+        </div>
+      </div>
+
+      <div class="app-form-grid mb-4">
+        <div class="app-floating">
+          <select class="app-select" id="audio_output" name="audio_output">
+            <option value="hdmi" {% if device_settings.audio_output == 'hdmi' %}selected{% endif %}>HDMI</option>
+            <option value="local" {% if device_settings.audio_output == 'local' %}selected{% endif %}>3.5mm jack</option>
+          </select>
+          <label for="audio_output">Audio output</label>
+        </div>
+
+        <div class="app-floating">
+          <input type="text" class="app-input" id="date_format" name="date_format" value="{{ device_settings.date_format }}" placeholder=" ">
+          <label for="date_format">Date format (e.g. mm/dd/yyyy)</label>
+        </div>
+
+        <div class="app-floating">
+          <input type="text" class="app-input" id="timezone" name="timezone" value="{{ device_settings.timezone }}" placeholder=" ">
+          <label for="timezone">Timezone (IANA name, e.g. America/New_York — blank for device default)</label>
+        </div>
+
+        <div class="app-floating">
+          <select class="app-select" id="screen_rotation" name="screen_rotation">
+            <option value="0" {% if device_settings.screen_rotation == 0 %}selected{% endif %}>Landscape (0°)</option>
+            <option value="90" {% if device_settings.screen_rotation == 90 %}selected{% endif %}>Portrait (90°)</option>
+            <option value="180" {% if device_settings.screen_rotation == 180 %}selected{% endif %}>Landscape, inverted (180°)</option>
+            <option value="270" {% if device_settings.screen_rotation == 270 %}selected{% endif %}>Portrait, inverted (270°)</option>
+          </select>
+          <label for="screen_rotation">Screen rotation</label>
+        </div>
+      </div>
+
+      <div>
+        {% include "_settings_toggle.html" with name="show_splash" label="Show splash screen" hint="Display the device's IP address on screen at boot." checked=device_settings.show_splash %}
+        {% include "_settings_toggle.html" with name="default_assets" label="Include default sample assets" hint="Auto-add the bundled sample assets to a fresh playlist." checked=device_settings.default_assets %}
+        {% include "_settings_toggle.html" with name="shuffle_playlist" label="Shuffle playlist" hint="Randomise the play order on every loop." checked=device_settings.shuffle_playlist %}
+        {% include "_settings_toggle.html" with name="prefer_dark_mode" label="Prefer dark mode" hint="Ask web page assets to render in dark mode where they support it." checked=device_settings.prefer_dark_mode %}
+        {% include "_settings_toggle.html" with name="use_24_hour_clock" label="Use 24-hour clock" hint="Display times in 24-hour format across the UI." checked=device_settings.use_24_hour_clock %}
+        {% include "_settings_toggle.html" with name="debug_logging" label="Debug logging" hint="Verbose viewer logs. Leave off unless you're chasing a problem." checked=device_settings.debug_logging %}
+        {% include "_settings_toggle.html" with name="verify_ssl" label="Verify SSL certificates" hint="Keep on. Turn off only to allow media or web pages served over HTTPS with a self-signed or untrusted certificate (e.g. an intranet host). Disables certificate checks device-wide." checked=device_settings.verify_ssl %}
+      </div>
+    </section>
+
+    <div class="flex justify-end">
+      <button type="submit" class="app-btn app-btn-primary">
+        <i class="ti ti-check"></i><span>Save settings</span>
+      </button>
+    </div>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

@@ -33,6 +33,11 @@ urlpatterns = [
         name='player_delete',
     ),
     path(
+        'players/<int:player_id>/settings/',
+        views.player_settings,
+        name='player_settings',
+    ),
+    path(
         'players/<int:player_id>/assets/_partials/table/',
         views.player_assets_table_partial,
         name='player_assets_table',
