@@ -128,6 +128,28 @@ def test_error_status_raises_player_api_error_with_status_code() -> None:
     assert exc_info.value.status_code == 401
 
 
+def test_upload_file_posts_multipart_and_returns_parsed_json() -> None:
+    client = PlayerAPIClient(_make_player())
+    payload = {'uri': '/data/.anthias/assets/abc.tmp', 'ext': '.jpg'}
+
+    with patch.object(
+        AnthiasSession, 'request', return_value=_response(json_data=payload)
+    ) as mock_request:
+        result = client.upload_file('photo.jpg', b'\xff\xd8\xff', 'image/jpeg')
+
+    assert result == payload
+    method, url = mock_request.call_args.args[:2]
+    assert method == 'POST'
+    assert url.endswith('/api/v2/file_asset')
+    files = mock_request.call_args.kwargs['files']
+    assert files == {
+        'file_upload': ('photo.jpg', b'\xff\xd8\xff', 'image/jpeg')
+    }
+    # No Content-Range / X-Upload-Id headers — this is always the
+    # single-shot upload path, never the resumable one.
+    assert 'json' not in mock_request.call_args.kwargs
+
+
 def test_delete_asset_returns_none_on_204() -> None:
     client = PlayerAPIClient(_make_player())
 

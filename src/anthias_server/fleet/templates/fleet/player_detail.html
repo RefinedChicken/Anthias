@@ -1,6 +1,23 @@
 {% extends "_layout.html" %}
+{% load static %}
 
 {% block title %}Fleet · {{ player.name }}{% endblock %}
+
+{% comment %} The Apps tab in the Add-asset modal below reuses
+   appsTab() — the exact same catalog-browsing / manifest-config-form
+   Alpine component the player app's own Add modal uses — rather than
+   a second implementation. That component is only built into home.js
+   (app/static/src/apps.ts has no standalone bundle of its own), so
+   this page loads it too, even though other fleet pages don't (see
+   _player_bulk_action_bar.html's window.fleetBulkSucceeded comment).
+   home.js's own boot code (drag-reorder, the processing-toast
+   watcher, homeApp()) all no-op safely here: each checks for a
+   home.html-only element (#asset-table, [x-data="homeApp()"], ...)
+   before doing anything, and none of those exist on this page.
+{% endcomment %}
+{% block extra_head %}
+<script src="{% static 'dist/js/home.js' %}" defer></script>
+{% endblock %}
 
 {% block main %}
 <div
@@ -79,42 +96,7 @@
 
   {% comment %}Flash messages are emitted as toasts by _toasts.html (vendor.ts drainDjangoMessages()).{% endcomment %}
 
-  <div x-show="showAddForm" x-cloak class="settings-section mb-4">
-    <header>
-      <div>
-        <h2>Add asset</h2>
-        <p class="settings-section__lede">Link a URI (image, video, or web page) to this player's playlist.</p>
-      </div>
-    </header>
-    <form method="post" action="{% url 'anthias_fleet:player_asset_create' player.id %}"
-      hx-post="{% url 'anthias_fleet:player_asset_create' player.id %}"
-      hx-target="#player-asset-table" hx-swap="outerHTML" class="app-form-grid">
-      {% csrf_token %}
-      <div class="app-floating">
-        <input type="url" class="app-input" id="asset_uri" name="uri" placeholder=" " required>
-        <label for="asset_uri">URI</label>
-      </div>
-      <div class="app-floating">
-        <input type="text" class="app-input" id="asset_name" name="name" placeholder=" ">
-        <label for="asset_name">Name (optional)</label>
-      </div>
-      <div class="app-floating">
-        <select class="app-select" id="asset_mimetype" name="mimetype">
-          <option value="webpage">Web page</option>
-          <option value="image">Image</option>
-          <option value="video">Video</option>
-        </select>
-        <label for="asset_mimetype">Type</label>
-      </div>
-      <div class="app-floating">
-        <input type="number" class="app-input" id="asset_duration" name="duration" value="10" min="0" placeholder=" ">
-        <label for="asset_duration">Duration (seconds)</label>
-      </div>
-      <button type="submit" class="app-btn app-btn-primary">
-        <i class="ti ti-check"></i><span>Add</span>
-      </button>
-    </form>
-  </div>
+  {% include "fleet/_player_asset_modal.html" %}
 
   {% include "fleet/_player_asset_table.html" %}
 

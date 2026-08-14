@@ -81,6 +81,28 @@ class PlayerAPIClient:
             'dict[str, Any]', self._request('POST', 'assets', json=data)
         )
 
+    def upload_file(
+        self, filename: str, content: bytes, content_type: str
+    ) -> dict[str, Any]:
+        """POST a single-shot multipart upload to the player's
+        ``v2/file_asset`` endpoint. Mirrors ``FileAssetViewMixin.post``'s
+        non-resumable path — no ``Content-Range``/``X-Upload-Id``, since
+        that machinery exists for the browser's own chunked uploader
+        recovering from a flaky LAN connection, not needed for one
+        fleet-to-player call. Returns the player's response verbatim
+        (``{'uri', 'ext', 'upload_id'}``); ``uri``/``ext`` feed straight
+        into a following ``create_asset()`` call the same way the
+        player's own upload pipeline consumes them internally.
+        """
+        return cast(
+            'dict[str, Any]',
+            self._request(
+                'POST',
+                'file_asset',
+                files={'file_upload': (filename, content, content_type)},
+            ),
+        )
+
     def get_asset(self, asset_id: str) -> dict[str, Any]:
         return cast(
             'dict[str, Any]', self._request('GET', f'assets/{asset_id}')

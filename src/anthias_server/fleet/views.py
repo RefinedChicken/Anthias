@@ -11,10 +11,14 @@ unsaved) ``Asset`` for the drill-down templates.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import timedelta
+from mimetypes import guess_type
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
+from django.conf import settings as django_settings
 from django.contrib import messages
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import URLValidator
@@ -25,7 +29,8 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
-from anthias_server.app.views import _set_toast_header
+from anthias_server.app.models import clamp_refresh_interval
+from anthias_server.app.views import _host_allowed, _set_toast_header
 from anthias_server.fleet.adapters import asset_from_player_dict
 from anthias_server.fleet.helpers import template
 from anthias_server.fleet.models import Player, PlayerGroup
@@ -312,6 +317,13 @@ def _player_detail_context(player: Player) -> dict[str, Any]:
         'active_assets': active,
         'inactive_assets': inactive,
         'fetch_error': fetch_error,
+        # Store-catalog index URL for the Add → Apps tab (read
+        # client-side off a <meta> tag in base.html). fleet.helpers
+        # .template() deliberately doesn't inject this the way
+        # app.helpers.template() does for every player page — the
+        # drill-down is the one fleet page whose Add modal actually
+        # has an Apps tab, so it's set here instead.
+        'app_store_index_url': django_settings.APP_STORE_INDEX_URL,
         'active_nav': 'players',
     }
 
@@ -373,9 +385,10 @@ def player_assets_table_partial(
 def player_asset_create(request: HttpRequest, player_id: int) -> HttpResponse:
     """Minimal URI-based add (name/uri/mimetype/duration) — the
     fleet-console equivalent of the player app's URL-tab add flow.
-    File upload and the YouTube/app-install special cases aren't
-    proxied here; an operator who needs those signs into the player's
-    own UI directly."""
+    File upload (``player_asset_upload``) and app-store installs
+    (``player_asset_create_app``) are proxied by their own views below.
+    YouTube URL detection is still local-only — an operator who needs
+    that pastes into the player's own UI directly."""
     player = get_object_or_404(Player, pk=player_id)
 
     uri = (request.POST.get('uri') or '').strip()
@@ -412,6 +425,198 @@ def player_asset_create(request: HttpRequest, player_id: int) -> HttpResponse:
         )
     return _player_asset_table_response(
         request, player, toast=('success', 'Asset added')
+    )
+
+
+@authorized
+@require_http_methods(['POST'])
+def player_asset_upload(request: HttpRequest, player_id: int) -> HttpResponse:
+    """File-upload tab equivalent for the drill-down. Unlike the
+    player's own ``assets_upload`` (which writes straight into the
+    local ``assetdir`` and creates the ``Asset`` row via the ORM), this
+    is a pure network proxy: the file is forwarded to the player's own
+    ``v2/file_asset`` endpoint, and the on-player path it hands back is
+    then passed to ``create_asset()`` — the same two-step
+    upload-then-create sequence a third-party API client would use, and
+    the same one the player's own upload pipeline follows internally
+    (``CreateAssetSerializerMixin.prepare_asset``'s ``is_local_upload``
+    branch)."""
+    player = get_object_or_404(Player, pk=player_id)
+
+    file_upload = request.FILES.get('file_upload')
+    if file_upload is None or not file_upload.name:
+        return _player_asset_table_response(
+            request, player, toast=('error', 'No file uploaded.')
+        )
+    upload_name: str = file_upload.name
+
+    # Matches the player's own gate (FileAssetViewMixin.post): image/*
+    # or video/* only, decided from the filename — checked here first
+    # so a rejected file doesn't cost a round trip to the player.
+    file_type = guess_type(upload_name)[0] or ''
+    if file_type.split('/')[0] not in ('image', 'video'):
+        return _player_asset_table_response(
+            request,
+            player,
+            toast=('error', 'Invalid file type. Expected image or video.'),
+        )
+    mimetype = file_type.split('/')[0]
+
+    name = (request.POST.get('name') or '').strip() or upload_name
+    try:
+        duration = int(request.POST.get('duration') or 10)
+    except (TypeError, ValueError):
+        duration = 10
+
+    client = PlayerAPIClient(player)
+    try:
+        uploaded = client.upload_file(
+            upload_name, file_upload.read(), file_type
+        )
+    except (PlayerUnreachableError, PlayerAPIError) as exc:
+        return _player_asset_table_response(
+            request, player, toast=('error', _client_error_message(exc))
+        )
+
+    now = timezone.now()
+    # Video duration must be zero on create — the player's own
+    # normalisation pipeline (ffprobe) fills in the real value once the
+    # upload is processed, mirroring the v2 API's own rule (see
+    # CreateAssetSerializerMixin.prepare_asset).
+    data: dict[str, Any] = {
+        'name': name,
+        'uri': uploaded['uri'],
+        'mimetype': mimetype,
+        'duration': 0 if mimetype == 'video' else max(0, duration),
+        'is_enabled': True,
+        'start_date': now.isoformat(),
+        'end_date': (now + timedelta(days=30)).isoformat(),
+    }
+    if uploaded.get('ext'):
+        data['ext'] = uploaded['ext']
+
+    try:
+        client.create_asset(data)
+    except (PlayerUnreachableError, PlayerAPIError) as exc:
+        return _player_asset_table_response(
+            request, player, toast=('error', _client_error_message(exc))
+        )
+    return _player_asset_table_response(
+        request, player, toast=('success', f'Uploaded {upload_name}')
+    )
+
+
+@authorized
+@require_http_methods(['POST'])
+def player_asset_create_app(
+    request: HttpRequest, player_id: int
+) -> HttpResponse:
+    """Apps-tab equivalent for the drill-down. By the time this is
+    called the operator's browser has already resolved the app's
+    launch URL / manifest / config values (the fleet drill-down loads
+    the exact same catalog-browsing JS the player app's own Add modal
+    uses) — this just forwards that same POST shape to
+    ``create_asset()`` instead of the local ORM, mirroring
+    ``anthias_server.app.views.assets_create_app``.
+
+    Note: the v2 API's create serializer only accepts a handful of
+    declared fields — unlike the player's own local ORM path,
+    arbitrary ``metadata`` (including the ``metadata.app`` stamp that
+    lets the player's Edit modal reopen the app's config form) isn't
+    settable through it and is silently dropped. The asset still gets
+    created and plays correctly as a plain webpage; it just won't be
+    editable as an "app" from the player's own UI afterwards. Only
+    ``refresh_interval_s`` round-trips, since that one is a declared
+    field on the create serializer.
+    """
+    player = get_object_or_404(Player, pk=player_id)
+
+    # Posted as app_uri / app_values (not uri / values) so the Apps
+    # form's hidden inputs never collide with the URL tab's visible
+    # name="uri" input — matches assets_create_app's own convention.
+    uri = (request.POST.get('app_uri') or '').strip()
+    app_id = (request.POST.get('app_id') or '').strip()
+    manifest_url = (request.POST.get('manifest_url') or '').strip()
+    manifest_version = (request.POST.get('manifest_version') or '').strip()
+    name = (request.POST.get('name') or '').strip()
+
+    if not app_id or not uri:
+        return _player_asset_table_response(
+            request,
+            player,
+            toast=('error', 'Could not add app — invalid app data.'),
+        )
+    try:
+        _url_validator(uri)
+    except DjangoValidationError:
+        return _player_asset_table_response(
+            request,
+            player,
+            toast=('error', 'Could not add app — invalid app data.'),
+        )
+
+    # Defence in depth, mirroring assets_create_app: the launch URL and
+    # manifest must sit on an allowed store origin, so this endpoint
+    # can't be used to stamp arbitrary URLs as store apps.
+    if not _host_allowed(urlparse(uri).hostname or ''):
+        return _player_asset_table_response(
+            request,
+            player,
+            toast=('error', 'That app is not from a recognised app store.'),
+        )
+    if manifest_url and not _host_allowed(
+        urlparse(manifest_url).hostname or ''
+    ):
+        return _player_asset_table_response(
+            request,
+            player,
+            toast=('error', 'That app is not from a recognised app store.'),
+        )
+
+    # Setting values chosen in the config form, echoed back into
+    # metadata.app for the edit-reopen flow — see the docstring caveat
+    # above about the v2 API dropping this key today.
+    try:
+        values = json.loads(request.POST.get('app_values') or '{}')
+    except (TypeError, ValueError, json.JSONDecodeError):
+        values = {}
+    if not isinstance(values, dict):
+        values = {}
+
+    now = timezone.now()
+    data: dict[str, Any] = {
+        'name': name or app_id,
+        'uri': uri,
+        'mimetype': 'webpage',
+        'duration': 10,
+        'is_enabled': True,
+        'start_date': now.isoformat(),
+        'end_date': (now + timedelta(days=30)).isoformat(),
+        'metadata': {
+            'app': {
+                'id': app_id,
+                'manifest_url': manifest_url,
+                'manifest_version': manifest_version,
+                'values': values,
+            }
+        },
+    }
+
+    raw_interval = request.POST.get('refresh_interval_s')
+    if raw_interval is not None and raw_interval.strip():
+        interval = clamp_refresh_interval(raw_interval.strip())
+        if interval:
+            data['refresh_interval_s'] = interval
+
+    client = PlayerAPIClient(player)
+    try:
+        client.create_asset(data)
+    except (PlayerUnreachableError, PlayerAPIError) as exc:
+        return _player_asset_table_response(
+            request, player, toast=('error', _client_error_message(exc))
+        )
+    return _player_asset_table_response(
+        request, player, toast=('success', 'App added')
     )
 
 

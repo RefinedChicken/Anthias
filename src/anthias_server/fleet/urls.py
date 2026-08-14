@@ -43,6 +43,16 @@ urlpatterns = [
         name='player_asset_create',
     ),
     path(
+        'players/<int:player_id>/assets/upload/',
+        views.player_asset_upload,
+        name='player_asset_upload',
+    ),
+    path(
+        'players/<int:player_id>/assets/apps/',
+        views.player_asset_create_app,
+        name='player_asset_create_app',
+    ),
+    path(
         'players/<int:player_id>/assets/bulk/action/',
         views.player_assets_bulk_action,
         name='player_assets_bulk_action',

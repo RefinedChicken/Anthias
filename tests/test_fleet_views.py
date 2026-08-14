@@ -19,6 +19,7 @@ from typing import Any
 from unittest import mock
 
 import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client
 from django.urls import reverse
 
@@ -249,6 +250,32 @@ def test_player_detail_renders_and_proxies_list_assets(client: Client) -> None:
 
 @pytest.mark.django_db
 @pytest.mark.urls(_FLEET_URLCONF)
+def test_player_detail_renders_app_store_index_meta_tag(
+    client: Client,
+) -> None:
+    """The Add-asset modal's Apps tab (appsTab(), reused from the
+    player app's own bundle) reads the store index URL off this meta
+    tag client-side — see fleet.views._player_detail_context. Unlike
+    every other fleet page, the drill-down must carry it."""
+    from django.conf import settings as django_settings
+
+    player = _make_player()
+    with mock.patch(
+        'anthias_server.fleet.views.PlayerAPIClient.list_assets',
+        return_value=[],
+    ):
+        response = client.get(
+            reverse('anthias_fleet:player_detail', args=[player.id])
+        )
+
+    assert response.status_code == 200
+    body = response.content.decode()
+    assert 'name="anthias-app-store-index"' in body
+    assert django_settings.APP_STORE_INDEX_URL in body
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
 def test_player_detail_shows_fetch_error_when_player_unreachable(
     client: Client,
 ) -> None:
@@ -299,6 +326,234 @@ def test_player_asset_create_proxies_with_expected_payload(
     assert sent['mimetype'] == 'image'
     assert sent['duration'] == 15
     assert sent['is_enabled'] is True
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_player_asset_upload_uploads_then_creates(client: Client) -> None:
+    player = _make_player()
+    upload = SimpleUploadedFile(
+        'photo.jpg', b'\xff\xd8\xff', content_type='image/jpeg'
+    )
+    with (
+        mock.patch(
+            'anthias_server.fleet.views.PlayerAPIClient.upload_file',
+            return_value={
+                'uri': '/data/.anthias/assets/abc123.tmp',
+                'ext': '.jpg',
+            },
+        ) as mock_upload,
+        mock.patch(
+            'anthias_server.fleet.views.PlayerAPIClient.create_asset',
+            return_value={},
+        ) as mock_create,
+        mock.patch(
+            'anthias_server.fleet.views.PlayerAPIClient.list_assets',
+            return_value=[],
+        ),
+    ):
+        response = client.post(
+            reverse('anthias_fleet:player_asset_upload', args=[player.id]),
+            {'file_upload': upload, 'name': 'Lobby photo', 'duration': '20'},
+        )
+
+    assert response.status_code == 302
+    mock_upload.assert_called_once()
+    filename, content, content_type = mock_upload.call_args.args
+    assert filename == 'photo.jpg'
+    assert content == b'\xff\xd8\xff'
+    assert content_type == 'image/jpeg'
+
+    mock_create.assert_called_once()
+    sent = mock_create.call_args.args[0]
+    assert sent['uri'] == '/data/.anthias/assets/abc123.tmp'
+    assert sent['ext'] == '.jpg'
+    assert sent['name'] == 'Lobby photo'
+    assert sent['mimetype'] == 'image'
+    assert sent['duration'] == 20
+    assert sent['is_enabled'] is True
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_player_asset_upload_forces_zero_duration_for_video(
+    client: Client,
+) -> None:
+    player = _make_player()
+    upload = SimpleUploadedFile(
+        'clip.mp4', b'\x00\x00\x00', content_type='video/mp4'
+    )
+    with (
+        mock.patch(
+            'anthias_server.fleet.views.PlayerAPIClient.upload_file',
+            return_value={'uri': '/data/.anthias/assets/def456.tmp'},
+        ),
+        mock.patch(
+            'anthias_server.fleet.views.PlayerAPIClient.create_asset',
+            return_value={},
+        ) as mock_create,
+        mock.patch(
+            'anthias_server.fleet.views.PlayerAPIClient.list_assets',
+            return_value=[],
+        ),
+    ):
+        response = client.post(
+            reverse('anthias_fleet:player_asset_upload', args=[player.id]),
+            {'file_upload': upload, 'duration': '25'},
+        )
+
+    assert response.status_code == 302
+    sent = mock_create.call_args.args[0]
+    assert sent['mimetype'] == 'video'
+    assert sent['duration'] == 0
+    # No 'ext' key from upload_file() this time — omitted, not sent as
+    # a literal null (CreateAssetSerializerV2's ext field isn't
+    # nullable).
+    assert 'ext' not in sent
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_player_asset_upload_rejects_non_media_file(client: Client) -> None:
+    player = _make_player()
+    upload = SimpleUploadedFile(
+        'notes.txt', b'hello', content_type='text/plain'
+    )
+    with (
+        mock.patch(
+            'anthias_server.fleet.views.PlayerAPIClient.upload_file',
+        ) as mock_upload,
+        mock.patch(
+            'anthias_server.fleet.views.PlayerAPIClient.list_assets',
+            return_value=[],
+        ),
+    ):
+        response = client.post(
+            reverse('anthias_fleet:player_asset_upload', args=[player.id]),
+            {'file_upload': upload},
+            follow=True,
+        )
+
+    assert response.status_code == 200
+    assert 'Invalid file type' in response.content.decode()
+    mock_upload.assert_not_called()
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_player_asset_upload_rejects_missing_file(client: Client) -> None:
+    player = _make_player()
+    with mock.patch(
+        'anthias_server.fleet.views.PlayerAPIClient.list_assets',
+        return_value=[],
+    ):
+        response = client.post(
+            reverse('anthias_fleet:player_asset_upload', args=[player.id]),
+            {},
+            follow=True,
+        )
+
+    assert response.status_code == 200
+    assert 'No file uploaded' in response.content.decode()
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_player_asset_create_app_proxies_with_expected_payload(
+    client: Client,
+) -> None:
+    player = _make_player()
+    with (
+        mock.patch(
+            'anthias_server.fleet.views.PlayerAPIClient.create_asset',
+            return_value={},
+        ) as mock_create,
+        mock.patch(
+            'anthias_server.fleet.views.PlayerAPIClient.list_assets',
+            return_value=[],
+        ),
+    ):
+        response = client.post(
+            reverse('anthias_fleet:player_asset_create_app', args=[player.id]),
+            {
+                'app_id': 'weather',
+                'app_uri': 'https://weather.srly.io/launch?city=nyc',
+                'manifest_url': 'https://weather.srly.io/manifest.json',
+                'manifest_version': '1',
+                'name': 'Weather',
+                'app_values': '{"city": "nyc"}',
+                'refresh_interval_s': '300',
+            },
+        )
+
+    assert response.status_code == 302
+    mock_create.assert_called_once()
+    sent = mock_create.call_args.args[0]
+    assert sent['uri'] == 'https://weather.srly.io/launch?city=nyc'
+    assert sent['name'] == 'Weather'
+    assert sent['mimetype'] == 'webpage'
+    assert sent['is_enabled'] is True
+    assert sent['metadata']['app']['id'] == 'weather'
+    assert sent['metadata']['app']['manifest_url'] == (
+        'https://weather.srly.io/manifest.json'
+    )
+    assert sent['metadata']['app']['values'] == {'city': 'nyc'}
+    assert sent['refresh_interval_s'] == 300
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_player_asset_create_app_rejects_missing_fields(
+    client: Client,
+) -> None:
+    player = _make_player()
+    with (
+        mock.patch(
+            'anthias_server.fleet.views.PlayerAPIClient.create_asset',
+        ) as mock_create,
+        mock.patch(
+            'anthias_server.fleet.views.PlayerAPIClient.list_assets',
+            return_value=[],
+        ),
+    ):
+        response = client.post(
+            reverse('anthias_fleet:player_asset_create_app', args=[player.id]),
+            {'app_id': '', 'app_uri': ''},
+            follow=True,
+        )
+
+    assert response.status_code == 200
+    assert 'invalid app data' in response.content.decode()
+    mock_create.assert_not_called()
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_player_asset_create_app_rejects_disallowed_host(
+    client: Client,
+) -> None:
+    player = _make_player()
+    with (
+        mock.patch(
+            'anthias_server.fleet.views.PlayerAPIClient.create_asset',
+        ) as mock_create,
+        mock.patch(
+            'anthias_server.fleet.views.PlayerAPIClient.list_assets',
+            return_value=[],
+        ),
+    ):
+        response = client.post(
+            reverse('anthias_fleet:player_asset_create_app', args=[player.id]),
+            {
+                'app_id': 'evil',
+                'app_uri': 'https://evil.example.com/launch',
+            },
+            follow=True,
+        )
+
+    assert response.status_code == 200
+    assert 'not from a recognised app store' in response.content.decode()
+    mock_create.assert_not_called()
 
 
 @pytest.mark.django_db

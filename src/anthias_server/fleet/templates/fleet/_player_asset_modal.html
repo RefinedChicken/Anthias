@@ -1,0 +1,255 @@
+{% comment %} Add-asset modal for the fleet drill-down. Mirrors
+   anthias_server/app/templates/_asset_modal.html's 3-tab Alpine
+   switcher (x-data="{ tab: 'uri' }") and its CSS conventions
+   (.modal-overlay / .modal-card / .app-tabs / .upload-dropzone /
+   .app-grid, all from the shared anthias.css bundle every fleet page
+   already loads via base.html) — pointed at the fleet's own proxied
+   endpoints (player_asset_create / player_asset_upload /
+   player_asset_create_app) instead of the player app's local ones.
+   The parent player_detail.html's x-data provides `showAddForm`.
+{% endcomment %}
+<div
+  x-show="showAddForm"
+  x-cloak
+  x-data="{ tab: 'uri' }"
+  class="modal-overlay"
+  @keydown.escape.window="showAddForm = false"
+  @click.self="showAddForm = false"
+>
+  <div class="modal-card">
+    <div class="modal-card__header">
+      <h2>Add asset</h2>
+      <button type="button" class="modal-card__close" @click="showAddForm = false" aria-label="Close">
+        <i class="ti ti-x"></i>
+      </button>
+    </div>
+
+    <div class="modal-card__body" style="padding-bottom: var(--space-3)">
+      <ul class="app-tabs mb-4" id="fleet-add-asset-nav-tabs">
+        <li class="app-tab-item">
+          <button type="button" id="fleet-tab-uri"
+            class="app-tab-link" :class="tab === 'uri' && 'active'"
+            @click="tab = 'uri'">
+            <i class="ti ti-link mr-1"></i>From URL
+          </button>
+        </li>
+        <li class="app-tab-item">
+          <button type="button"
+            class="app-tab-link" :class="tab === 'file' && 'active'"
+            @click="tab = 'file'">
+            <i class="ti ti-cloud-upload mr-1"></i>Upload file
+          </button>
+        </li>
+        <li class="app-tab-item">
+          <button type="button" id="fleet-tab-apps"
+            class="app-tab-link" :class="tab === 'apps' && 'active'"
+            @click="tab = 'apps'">
+            <i class="ti ti-apps mr-1"></i>Apps
+          </button>
+        </li>
+      </ul>
+    </div>
+
+    {# ---- From URL ---- #}
+    <form
+      x-show="tab === 'uri'"
+      method="post"
+      action="{% url 'anthias_fleet:player_asset_create' player.id %}"
+      hx-post="{% url 'anthias_fleet:player_asset_create' player.id %}"
+      hx-target="#player-asset-table"
+      hx-swap="outerHTML"
+      hx-on::after-request="if (event.detail.successful) { showAddForm = false }"
+    >
+      {% csrf_token %}
+      <div class="modal-card__body" style="padding-top: 0">
+        <div class="app-floating mb-3">
+          <input type="url" class="app-input" id="fleet-add-uri" name="uri" placeholder=" " required>
+          <label for="fleet-add-uri">Asset URL</label>
+        </div>
+        <div class="app-floating mb-3">
+          <input type="text" class="app-input" id="fleet-add-name" name="name" placeholder=" ">
+          <label for="fleet-add-name">Name (optional)</label>
+        </div>
+        <div class="app-form-grid">
+          <div class="app-floating">
+            <select class="app-select" id="fleet-add-mimetype" name="mimetype">
+              <option value="webpage">Web page</option>
+              <option value="image">Image</option>
+              <option value="video">Video</option>
+            </select>
+            <label for="fleet-add-mimetype">Type</label>
+          </div>
+          <div class="app-floating">
+            <input type="number" class="app-input" id="fleet-add-duration" name="duration" value="10" min="0" placeholder=" ">
+            <label for="fleet-add-duration">Duration (seconds)</label>
+          </div>
+        </div>
+        <p class="muted-label mt-3 mb-0">Web pages, hosted images, hosted videos, and streaming URLs are all supported.</p>
+      </div>
+      <div class="modal-card__footer">
+        <button type="button" class="app-btn app-btn-link" @click="showAddForm = false">Cancel</button>
+        <button type="submit" class="app-btn app-btn-primary">
+          <i class="ti ti-plus"></i><span>Add asset</span>
+        </button>
+      </div>
+    </form>
+
+    {% comment %} The file tab is NOT htmx-managed — a plain multipart
+       POST, same deliberate choice as _asset_modal.html's own file tab
+       (assets_upload / player_asset_upload both read a single
+       request.FILES['file_upload']). Unlike the player app's own tab,
+       this one doesn't batch multiple files through a hand-rolled XHR
+       uploader: the drill-down only takes one file per submit, so a
+       plain synchronous browser POST — no JS at all — already does the
+       right thing, and the view's non-HTMX response path (a redirect
+       back to player_detail with a toast) already exists for exactly
+       this case. {% endcomment %}
+    <form
+      x-show="tab === 'file'"
+      method="post"
+      action="{% url 'anthias_fleet:player_asset_upload' player.id %}"
+      enctype="multipart/form-data"
+    >
+      {% csrf_token %}
+      <div class="modal-card__body" style="padding-top: 0">
+        <div class="app-floating mb-3">
+          <input type="text" class="app-input" id="fleet-upload-name" name="name" placeholder=" ">
+          <label for="fleet-upload-name">Name (optional)</label>
+        </div>
+        <div class="app-floating mb-3">
+          <input type="number" class="app-input" id="fleet-upload-duration" name="duration" value="10" min="0" placeholder=" ">
+          <label for="fleet-upload-duration">Duration (seconds, images only)</label>
+        </div>
+        <label for="fleet-add-file" class="upload-dropzone">
+          <i class="ti ti-cloud-upload" style="font-size: 2.25rem; opacity: 0.55"></i>
+          <p class="mb-1 font-semibold mt-2">Click to choose a file</p>
+          <p class="muted-label mb-0">An image or video to send to this one player.</p>
+          <input type="file" class="hidden" id="fleet-add-file" name="file_upload" accept="image/*,video/*" required>
+        </label>
+      </div>
+      <div class="modal-card__footer">
+        <button type="button" class="app-btn app-btn-link" @click="showAddForm = false">Cancel</button>
+        <button type="submit" class="app-btn app-btn-primary">
+          <i class="ti ti-cloud-upload"></i><span>Upload</span>
+        </button>
+      </div>
+    </form>
+
+    {% comment %} Apps tab — reuses the exact same catalog-browsing /
+       manifest-config-form logic the player app's own Add modal uses
+       (appsTab(), defined in app/static/src/apps.ts and exposed on
+       window by home.js — see player_detail.html's extra_head block
+       for why this one page loads that bundle). Installing POSTs the
+       resolved launch URL to player_asset_create_app instead of the
+       player's local assets_create_app. {% endcomment %}
+    <div
+      x-show="tab === 'apps'"
+      x-data="appsTab()"
+      x-effect="if (tab === 'apps') load()"
+    >
+      <div class="modal-card__body app-cfg-state" x-show="phase === 'loading'" x-cloak>
+        <i class="ti ti-loader-2 app-cfg-spin" aria-hidden="true"></i>
+        <p class="muted-label m-0">Loading apps…</p>
+      </div>
+
+      <div class="modal-card__body app-cfg-state" x-show="phase === 'error'" x-cloak>
+        <i class="ti ti-plug-connected-x" style="font-size: 2rem; opacity: .55" aria-hidden="true"></i>
+        <p class="mb-2" x-text="error"></p>
+        <button type="button" class="app-btn app-btn-secondary" @click="retry()">
+          <i class="ti ti-refresh"></i><span>Try again</span>
+        </button>
+      </div>
+
+      <div x-show="phase === 'ready'" x-cloak>
+        <div class="modal-card__body" style="padding-top: 0">
+          <div class="app-grid">
+            <template x-for="app in apps" :key="app.id">
+              <button type="button" class="app-card" @click="select(app)">
+                <span class="app-card__icon">
+                  <template x-if="app.manifest.icon">
+                    <img :src="app.manifest.icon" :alt="app.manifest.name" loading="lazy">
+                  </template>
+                  <template x-if="!app.manifest.icon">
+                    <i class="ti ti-app-window" aria-hidden="true"></i>
+                  </template>
+                </span>
+                <span class="app-card__body">
+                  <span class="app-card__name" x-text="app.manifest.name"></span>
+                  <span class="app-card__text"
+                    x-text="app.manifest.summary || app.manifest.description"></span>
+                  <span class="app-card__tags" x-show="app.manifest.tags && app.manifest.tags.length">
+                    <template x-for="tag in (app.manifest.tags || []).slice(0, 3)" :key="tag">
+                      <span class="app-card__tag" x-text="tag"></span>
+                    </template>
+                  </span>
+                </span>
+              </button>
+            </template>
+          </div>
+        </div>
+        <div class="modal-card__footer">
+          <button type="button" class="app-btn app-btn-link" @click="showAddForm = false">Cancel</button>
+        </div>
+      </div>
+
+      <form
+        x-show="phase === 'config'"
+        x-cloak
+        method="post"
+        action="{% url 'anthias_fleet:player_asset_create_app' player.id %}"
+        hx-post="{% url 'anthias_fleet:player_asset_create_app' player.id %}"
+        hx-target="#player-asset-table"
+        hx-swap="outerHTML"
+        hx-on::after-request="if (event.detail.successful) { showAddForm = false }"
+      >
+        {% csrf_token %}
+        <input type="hidden" name="app_id" :value="appId">
+        <input type="hidden" name="manifest_url" :value="manifestUrl">
+        <input type="hidden" name="manifest_version" :value="manifestVersion">
+        <input type="hidden" name="app_uri" :value="launchUrl">
+        <input type="hidden" name="app_values" :value="valuesJson">
+        <input type="hidden" name="refresh_interval_s" :value="refreshIntervalS">
+
+        <div class="modal-card__body" style="padding-top: var(--space-2)">
+          <button type="button" class="app-cfg-back" @click="back()">
+            <i class="ti ti-arrow-left"></i><span>All apps</span>
+          </button>
+
+          <div class="app-cfg-head">
+            <span class="app-card__icon app-card__icon--lg">
+              <template x-if="selected && selected.manifest.icon">
+                <img :src="selected.manifest.icon" :alt="selected.manifest.name">
+              </template>
+              <template x-if="selected && !selected.manifest.icon">
+                <i class="ti ti-app-window" aria-hidden="true"></i>
+              </template>
+            </span>
+            <div>
+              <h3 class="app-cfg-title" x-text="selected && selected.manifest.name"></h3>
+              <p class="muted-label m-0"
+                x-text="selected && selected.manifest.description"></p>
+            </div>
+          </div>
+
+          <div class="app-floating mt-4 mb-3">
+            <input type="text" class="app-input" id="fleet-app-asset-name" name="name" :value="assetName" @input="nameEdited = true" placeholder=" " required>
+            <label for="fleet-app-asset-name">Name</label>
+          </div>
+
+          <div class="app-cfg-fields" x-ref="configHost"></div>
+
+          <p class="app-cfg-nosettings muted-label m-0" x-show="!hasConfig">
+            This app has no settings — it's ready to add.
+          </p>
+        </div>
+
+        <div class="modal-card__footer">
+          <button type="button" class="app-btn app-btn-link" @click="back()">Back</button>
+          <button type="submit" class="app-btn app-btn-primary">
+            <i class="ti ti-plus"></i><span>Add app</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
