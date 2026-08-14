@@ -60,10 +60,8 @@ __copyright__ = 'Copyright 2012-2026, Screenly, Inc'
 __license__ = 'Dual License: GPLv2 and Commercial License'
 
 
-CELERY_RESULT_BACKEND = getenv(
-    'CELERY_RESULT_BACKEND', 'redis://localhost:6379/0'
-)
-CELERY_BROKER_URL = getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = getenv('CELERY_RESULT_BACKEND', 'redis://redis:6379/0')
+CELERY_BROKER_URL = getenv('CELERY_BROKER_URL', 'redis://redis:6379/0')
 CELERY_TASK_RESULT_EXPIRES = timedelta(hours=6)
 
 r = connect_to_redis()

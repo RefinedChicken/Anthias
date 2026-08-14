@@ -68,6 +68,15 @@ services:
       - LISTEN=0.0.0.0
       - ANTHIAS_SERVICE=fleet
       - ENVIRONMENT=development
+      # Same DB 1 as anthias-fleet-celery below — without this, a web
+      # request that calls .delay() (bulk asset push, template apply)
+      # falls back to celery_tasks.py's bare-host default
+      # (redis://localhost:6379/0), which doesn't resolve inside this
+      # container and 500s the request. The scheduled heartbeat sweep
+      # never surfaced this: it only ever runs from
+      # anthias-fleet-celery, which already sets these.
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
     restart: always
     volumes:
       # Deliberately a separate named volume, never anthias-data — a
