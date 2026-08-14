@@ -61,19 +61,19 @@ def test_api_tokens_create_rejects_blank_name() -> None:
 
 
 @pytest.mark.django_db
-def test_api_tokens_create_without_operator_account_is_rejected(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """No persisted operator row exists yet — a token can't be scoped
-    to a nonexistent User, so creation must be a no-op rather than a
-    500 from the non-nullable FK."""
-    monkeypatch.setattr(
-        'anthias_server.lib.auth._persisted_operator', lambda: None
-    )
-    # settings_view/api_tokens_create both run behind @authorized, which
-    # passes through unconditionally while auth_backend is '' (the test
-    # default) — no session/login needed to reach the view itself.
-    client = Client()
+def test_api_tokens_create_requires_settings_access() -> None:
+    """Settings-family views (api_tokens_create included) are gated by
+    require_settings_access independent of auth_backend: an anonymous
+    caller must be rejected even though @authorized itself passes
+    everyone through while auth_backend is '' (the test default) —
+    reaching Settings requires an authenticated staff-or-admin user,
+    not just "a request while auth is off". Token creation must stay
+    a no-op; tokens are scoped to a real User row (AnthiasAPIToken.user
+    is non-nullable) so there'd be nothing to scope an anonymous
+    caller's token to anyway.
+    """
+    _make_operator()  # an admin exists, so require_setup_complete passes
+    client = Client()  # not logged in — require_settings_access blocks
 
     client.post(
         reverse('anthias_app:api_tokens_create'), {'name': 'fleet-server'}

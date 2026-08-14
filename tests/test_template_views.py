@@ -15,6 +15,7 @@ from typing import Any
 from unittest import mock
 
 import pytest
+from django.contrib.auth.models import User
 from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
@@ -23,10 +24,38 @@ from anthias_server.app import page_context
 from anthias_server.app.models import DURATION_S_MAX, Asset
 from anthias_server.app.templatetags.asset_filters import to_json
 
+# Centralised so Sonar's S2068 (hardcoded credential) fires once, not
+# once per fixture use — this string never reaches a real credential
+# store, it only seeds an in-memory test User.
+_ADMIN_PWD = 'fixture-template-tests-admin-pwd'  # NOSONAR
+
 
 @pytest.fixture
-def client() -> Client:
-    return Client()
+def client(db: None) -> Client:
+    """Every request into anthias_server.app.views now passes through
+    two gates ahead of the view under test:
+
+    * ``require_setup_complete`` (lib.auth) — redirects to /setup/
+      unless at least one admin account exists.
+    * ``require_settings_access`` (lib.auth) — for the Settings-family
+      views specifically, requires an authenticated staff-or-admin
+      user (not just "some session"), independent of auth_backend.
+
+    This file is about each view's own behavior, not either gate
+    (see test_auth.py for that), so every test gets a real, logged-in
+    admin by default — satisfies both gates uniformly and needs no
+    per-test changes. ``auth_backend`` stays '' in tests, so
+    ``@authorized`` itself still passes anonymous requests straight
+    through exactly as before; being logged in here only matters for
+    the Settings-family views' extra ``require_settings_access`` gate.
+    """
+    admin = User.objects.create_superuser(
+        username='template-tests-admin',
+        password=_ADMIN_PWD,  # NOSONAR
+    )
+    logged_in_client = Client()
+    logged_in_client.force_login(admin)
+    return logged_in_client
 
 
 @pytest.fixture
@@ -111,12 +140,20 @@ def test_settings_renders(client: Client) -> None:
         'Audio output',
         'Date format',
         'Timezone',
-        'Authentication',
+        # The old single-operator Authentication section (auth_backend
+        # dropdown + username/password/confirm triplet) is gone,
+        # replaced by the multi-user Users card.
+        'Users',
+        'Your account',
         'Show splash screen',
         'Backup',
         'System controls',
     ):
         assert label in body
+    assert 'Authentication' not in body
+    assert 'name="auth_backend"' not in body
+    # The logged-in admin fixture user shows up in the Users table.
+    assert 'template-tests-admin' in body
     # The timezone dropdown is populated from the IANA list, with the
     # real id as the option value and a humanised (underscore-free)
     # label shown to the operator.

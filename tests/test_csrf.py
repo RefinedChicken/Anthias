@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+from django.contrib.auth.models import User
 from django.test import Client
 from django.urls import reverse
 
@@ -26,6 +27,24 @@ if TYPE_CHECKING:
 _HTTP_SAME_HOST_ORIGIN = 'http://anthias.local'  # NOSONAR
 _HTTP_CROSS_HOST_ORIGIN = 'http://attacker.example'  # NOSONAR
 _HTTPS_SAME_HOST_ORIGIN = 'https://anthias.local'
+
+
+@pytest.fixture(autouse=True)
+def _seed_admin(db: None) -> None:
+    """``require_setup_complete`` (lib.auth) redirects every
+    anthias_app request to /setup/ until an admin account exists.
+    This suite is about Origin/CSRF handling on `home` /
+    `assets_control`, not the setup gate itself (see test_auth.py),
+    so seed one persisted admin per test so ordinary requests reach
+    those views. No login needed: auth_backend stays '' by default in
+    tests, so @authorized still passes anonymous requests through
+    exactly as before — this fixture only satisfies the separate
+    setup-gate check.
+    """
+    User.objects.create_superuser(
+        username='csrf-tests-admin',
+        password='fixture-csrf-tests-admin-pwd',  # NOSONAR
+    )
 
 
 def _seed_csrf_cookie(client: Client, host: str) -> str:

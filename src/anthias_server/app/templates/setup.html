@@ -1,0 +1,62 @@
+{% load static %}
+{% comment %}
+  Standalone first-run setup shell — mirrors login.html (doesn't
+  extend base.html; see that file's comment for why: base.html pulls
+  in vendor.js, which unconditionally opens /ws, and that bundle has
+  no role on a pre-auth surface).
+
+  Shown once, before any admin account exists on this device.
+  Submitting the form here creates the account, pins auth on
+  permanently, and signs the new admin straight in — see
+  anthias_server.app.views.setup.
+{% endcomment %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Set up Anthias</title>
+  <link href="{% static 'dist/css/tabler-icons.css' %}" rel="stylesheet"/>
+  <link href="{% static 'dist/css/anthias.css' %}" rel="stylesheet"/>
+  <link rel="icon" href="/static/favicons/favicon.ico"/>
+</head>
+<body class="auth-body">
+<div class="auth-page">
+  <main class="auth-shell">
+    <div class="auth-card">
+      <div class="auth-card__brand">
+        <img src="{% static 'img/dark.svg' %}" alt="Anthias" class="auth-logo"/>
+      </div>
+
+      <h1 class="auth-headline">Welcome to Anthias</h1>
+      <p class="auth-subhead">Create the admin account for this player. You'll sign in with it from now on.</p>
+
+      {% if messages %}
+      <ul class="auth-alert" role="alert">
+        {% for message in messages %}<li>{{ message }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+
+      <form method="post" action="{% url 'anthias_app:setup' %}" class="auth-form">
+        {% csrf_token %}
+        <div class="app-floating">
+          <input type="text" class="app-input" id="username" name="username" value="{{ username }}" placeholder=" " autocomplete="username" required>
+          <label for="username">Username</label>
+        </div>
+        <div class="app-floating">
+          <input type="password" class="app-input" id="password" name="password" placeholder=" " autocomplete="new-password" required>
+          <label for="password">Password</label>
+        </div>
+        <div class="app-floating">
+          <input type="password" class="app-input" id="password_confirm" name="password_confirm" placeholder=" " autocomplete="new-password" required>
+          <label for="password_confirm">Confirm password</label>
+        </div>
+        <button type="submit" class="app-btn app-btn-primary auth-submit">
+          <i class="ti ti-user-plus"></i><span>Create admin account</span>
+        </button>
+      </form>
+    </div>
+  </main>
+</div>
+</body>
+</html>
