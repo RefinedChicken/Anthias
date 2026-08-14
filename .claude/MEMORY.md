@@ -36,6 +36,14 @@ below is also captured, in depth, in the committed skills under
 
 ## Highest-value cross-cutting facts (the things easiest to get wrong)
 
+- **This fork is becoming two coordinated products: Anthias Player (this repo)
+  + a new Fleet Server control-plane service.** Status, scope, and what's
+  actually landed vs. not yet built live in **CLAUDE.md → "Two-product
+  direction (in progress)"** — read that section first on any task touching
+  auth, the REST API, pairing, or sync; don't infer scope from git history or
+  assume anything beyond what that section says is done. The skills below
+  are unrelated to this effort — they're single-device operational knowledge
+  and remain accurate regardless of how the Fleet Server work proceeds.
 - **The repo is server-rendered Django, not React.** UI = templates +
   Alpine.js/htmx under `src/anthias_server/app/`; thin TS bundles built by bun.
   Everything moved under `src/` (`anthias_common`, `anthias_server`,

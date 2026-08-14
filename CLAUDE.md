@@ -6,6 +6,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Anthias is an open-source digital signage platform for Raspberry Pi and x86 PCs (formerly Screenly OSE). It manages and displays media assets (images, videos, web pages) on connected screens.
 
+## Two-product direction (in progress)
+
+This fork is being expanded, incrementally, into two coordinated products without breaking the one that already works today:
+
+- **Anthias Player** — this repo, largely as described below. A standalone, API-driven, locally-authenticated device that never depends on anything external to run. It is the execution/data plane: playback, local media storage, rendering, scheduling, hardware/display/network config, diagnostics, local auth.
+- **Fleet Server** — a new control-plane service, added as `src/anthias_fleet_server/` (new Django project, own PostgreSQL database), not yet present in the tree beyond groundwork on the Player side. It pairs with many Players, holds desired state (content/playlists/schedules/config) for them, and issues commands, while each Player keeps executing independently.
+
+Core principle: **a Player owns its local runtime state; content/configuration authority can be delegated to a Fleet Server.** When paired, Fleet is authoritative for fleet-managed resources; the Player is always authoritative for execution/runtime state and keeps playing already-deployed content if the Fleet Server is unreachable — playback never depends on the Fleet Server, because the viewer reads local SQLite directly and never called out to the API for its playlist to begin with. Transport is Player-initiated only (outbound HTTPS poll baseline + a persistent outbound WebSocket for near-real-time commands, with automatic fallback to polling) — the Fleet Server never dials into a Player for normal operation.
+
+Landed so far:
+- `AnthiasAPIToken` bearer-token auth (`src/anthias_server/lib/auth.py`, `src/anthias_server/api/models.py`) — the credential a Fleet Server (or any other unattended caller) uses against a Player's REST API, distinct from operator session/password auth.
+- REST management of those tokens at `/api/v2/auth/tokens` (list/create) and `/api/v2/auth/tokens/<id>` (revoke) — `src/anthias_server/api/views/v2.py`, `serializers/v2.py`, `urls/v2.py`. Session-authenticated only; a bearer token cannot be used to mint or revoke other tokens (`_reject_bearer_token_auth`).
+
+Not yet built: Player identity/pairing-policy models, the `src/anthias_fleet_server/` service itself, the pairing protocol, and the desired-state sync engine. Treat any code or docs suggesting otherwise as stale — this section is the single source of truth for where the two-product effort currently stands; update it alongside the work, don't let it drift.
+
 ## Architecture
 
 Anthias runs as a set of Docker containers:
@@ -176,4 +191,4 @@ Process and workflow rules for this repo (the deeper "why" for each lives in the
 
 ## API Versions
 
-The REST API has multiple versions at `/api/v1/`, `/api/v1.1/`, `/api/v1.2/`, and `/api/v2/`. The v2 API (in `src/anthias_server/api/views/v2.py`) is the current primary API using DRF with drf-spectacular for OpenAPI schema generation.
+The REST API has multiple versions at `/api/v1/`, `/api/v1.1/`, `/api/v1.2/`, and `/api/v2/`. The v2 API (in `src/anthias_server/api/views/v2.py`) is the current primary API using DRF with drf-spectacular for OpenAPI schema generation. v1/v1.1/v1.2 are frozen, asset-CRUD-only back-compat surfaces; new capability — including the domain-grouped resources being added for the Fleet Server effort (`auth/`, `player/`, `management/`, etc.) — lands as additive sub-resources under `/api/v2/`, never as a change to an existing version's wire shape.

@@ -1,6 +1,8 @@
 from django.urls import URLPattern, URLResolver, path
 
 from anthias_server.api.views.v2 import (
+    ApiTokenDetailViewV2,
+    ApiTokenListViewV2,
     AssetContentViewV2,
     AssetListViewV2,
     AssetRecheckViewV2,
@@ -68,6 +70,16 @@ def get_url_patterns() -> list[URLPattern | URLResolver]:
             'v2/device_settings',
             DeviceSettingsViewV2.as_view(),
             name='device_settings_v2',
+        ),
+        path(
+            'v2/auth/tokens',
+            ApiTokenListViewV2.as_view(),
+            name='api_token_list_v2',
+        ),
+        path(
+            'v2/auth/tokens/<int:token_id>',
+            ApiTokenDetailViewV2.as_view(),
+            name='api_token_detail_v2',
         ),
         path(
             'v2/info',

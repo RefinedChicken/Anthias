@@ -19,6 +19,7 @@ from rest_framework.serializers import (
 )
 
 from anthias_common.utils import SCREEN_ROTATION_CHOICES
+from anthias_server.api.models import AnthiasAPIToken
 from anthias_server.api.serializers import UpdateAssetSerializer
 from anthias_server.api.serializers.mixins import CreateAssetSerializerMixin
 from anthias_server.app.models import (
@@ -548,3 +549,48 @@ class ImportItemSerializerV2(Serializer[Any]):
     token = CharField(write_only=True)
     remote_id = CharField()
     enable = BooleanField(required=False, default=True)
+
+
+class ApiTokenSerializerV2(ModelSerializer[AnthiasAPIToken]):
+    """Read shape for an issued ``AnthiasAPIToken`` row.
+
+    Never includes ``token_hash`` — the raw token is only ever visible
+    once, at creation time, via ``ApiTokenCreatedSerializerV2``.
+    """
+
+    class Meta:
+        model = AnthiasAPIToken
+        fields: ClassVar = [
+            'id',
+            'name',
+            'prefix',
+            'created_at',
+            'last_used_at',
+            'expires_at',
+        ]
+        read_only_fields: ClassVar = fields
+
+
+class ApiTokenCreatedSerializerV2(ApiTokenSerializerV2):
+    """Same shape as ``ApiTokenSerializerV2`` plus the raw token value.
+
+    Only ever built from a just-issued token row that's had ``.token``
+    set on it in memory (see ``issue_api_token``) — never persisted, so
+    this is the only response that can ever carry the secret.
+    """
+
+    token = CharField()
+
+    class Meta(ApiTokenSerializerV2.Meta):
+        fields: ClassVar = [*ApiTokenSerializerV2.Meta.fields, 'token']
+        read_only_fields: ClassVar = fields
+
+
+class CreateApiTokenSerializerV2(Serializer[Any]):
+    """Request body for issuing a new API token."""
+
+    # Bounded like the HTML form's implicit limit — an unbounded
+    # TextField on the model, but there's no reason a display name
+    # needs to be longer than this.
+    name = CharField(max_length=200)
+    expires_at = DateTimeField(required=False, allow_null=True)

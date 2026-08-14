@@ -34,8 +34,12 @@ from anthias_server.api.helpers import (
     finalize_asset_update,
     persist_new_asset,
 )
+from anthias_server.api.models import AnthiasAPIToken
 from anthias_server.api.serializers.v2 import (
+    ApiTokenCreatedSerializerV2,
+    ApiTokenSerializerV2,
     AssetSerializerV2,
+    CreateApiTokenSerializerV2,
     CreateAssetSerializerV2,
     DeviceSettingsSerializerV2,
     ImportItemSerializerV2,
@@ -69,8 +73,10 @@ from anthias_server.app.models import Asset
 from anthias_server.lib import diagnostics
 from anthias_server.lib.auth import (
     AuthSettingsError,
+    _persisted_operator,
     apply_auth_settings,
     authorized,
+    issue_api_token,
     operator_username,
 )
 from anthias_server.lib.github import is_up_to_date
@@ -773,6 +779,142 @@ def _compute_viewer_deadline(
         )
 
     return min(candidates) if candidates else None
+
+
+def _reject_bearer_token_auth(request: Request) -> Response | None:
+    """Refuse to manage API tokens using an API token as the credential.
+
+    Session (or Basic) auth is required instead — token management is
+    deliberately excluded from what a bearer token itself can authorize,
+    so a leaked/compromised token can't mint further tokens or revoke
+    the ones an operator relies on. Mirrors the HTML settings page,
+    which only ever runs under a session. Returns ``None`` when the
+    request is fine to proceed.
+    """
+    if isinstance(request.auth, AnthiasAPIToken):
+        return Response(
+            {
+                'error': (
+                    'API tokens cannot be used to manage other API '
+                    'tokens. Sign in with your operator session instead.'
+                ),
+            },
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
+
+
+class ApiTokenListViewV2(APIView):
+    """List and create ``AnthiasAPIToken`` rows for the operator account.
+
+    REST counterpart to the HTML-only ``/settings/api-tokens/create/``
+    path (``anthias_server.app.views.api_tokens_create``) — see that
+    view's docstring for the operator-account precondition, mirrored
+    here so both surfaces agree on when token issuance is possible.
+    """
+
+    @extend_schema(
+        summary='List API tokens',
+        responses={200: ApiTokenSerializerV2(many=True)},
+    )
+    @authorized
+    def get(self, request: Request) -> Response:
+        operator = _persisted_operator()
+        tokens = (
+            AnthiasAPIToken.objects.filter(user=operator)
+            if operator is not None
+            else AnthiasAPIToken.objects.none()
+        )
+        return Response(ApiTokenSerializerV2(tokens, many=True).data)
+
+    @extend_schema(
+        summary='Create an API token',
+        request=CreateApiTokenSerializerV2,
+        responses={
+            201: ApiTokenCreatedSerializerV2,
+            400: {
+                'type': 'object',
+                'properties': {'error': {'type': 'string'}},
+            },
+            403: {
+                'type': 'object',
+                'properties': {'error': {'type': 'string'}},
+            },
+        },
+    )
+    @authorized
+    def post(self, request: Request) -> Response:
+        rejection = _reject_bearer_token_auth(request)
+        if rejection is not None:
+            return rejection
+
+        operator = _persisted_operator()
+        if operator is None:
+            return Response(
+                {
+                    'error': (
+                        'Create an operator account under Authentication '
+                        'before issuing API tokens.'
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = CreateApiTokenSerializerV2(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        token_row, raw_token = issue_api_token(
+            operator, serializer.validated_data['name']
+        )
+        expires_at = serializer.validated_data.get('expires_at')
+        if expires_at is not None:
+            token_row.expires_at = expires_at
+            token_row.save(update_fields=['expires_at'])
+
+        # ``token`` is not a model field — set on the in-memory instance
+        # only, for ApiTokenCreatedSerializerV2 to pick up. This is the
+        # one and only place the raw value is ever available again.
+        token_row.token = raw_token
+        return Response(
+            ApiTokenCreatedSerializerV2(token_row).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ApiTokenDetailViewV2(APIView):
+    """Revoke a single ``AnthiasAPIToken`` row."""
+
+    @extend_schema(
+        summary='Revoke an API token',
+        responses={
+            204: None,
+            403: {
+                'type': 'object',
+                'properties': {'error': {'type': 'string'}},
+            },
+            404: {
+                'type': 'object',
+                'properties': {'error': {'type': 'string'}},
+            },
+        },
+    )
+    @authorized
+    def delete(self, request: Request, token_id: int) -> Response:
+        rejection = _reject_bearer_token_auth(request)
+        if rejection is not None:
+            return rejection
+
+        operator = _persisted_operator()
+        deleted, _ = AnthiasAPIToken.objects.filter(
+            pk=token_id, user=operator
+        ).delete()
+        if not deleted:
+            return Response(
+                {'error': 'Token not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ViewerPlaylistViewV2(APIView):
