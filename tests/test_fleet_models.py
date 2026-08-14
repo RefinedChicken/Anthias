@@ -4,9 +4,16 @@ encryption wrapper their api_token field relies on."""
 from __future__ import annotations
 
 import pytest
+from django.db import IntegrityError
 
 from anthias_server.fleet.crypto import decrypt_api_token, encrypt_api_token
-from anthias_server.fleet.models import Player, PlayerGroup
+from anthias_server.fleet.models import (
+    Player,
+    PlayerGroup,
+    PlaylistTemplate,
+    PlaylistTemplateItem,
+    PlaylistTemplatePlacement,
+)
 
 _RAW_TOKEN = 'ant_fixture-raw-token-value'  # NOSONAR
 
@@ -118,3 +125,87 @@ def test_health_flags_never_polled_player_has_no_flags() -> None:
     # must not spuriously flag anything from absent data.
     player = _make_player()
     assert player.health_flags == []
+
+
+# ---------------------------------------------------------------------------
+# Playlist templates
+
+
+@pytest.mark.django_db
+def test_playlist_template_item_get_play_days_defaults_to_every_day() -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+    item = PlaylistTemplateItem.objects.create(
+        template=tmpl,
+        name='Board',
+        uri='https://example.com',
+        mimetype='webpage',
+    )
+    assert item.get_play_days() == [1, 2, 3, 4, 5, 6, 7]
+
+
+@pytest.mark.django_db
+def test_playlist_template_item_get_play_days_parses_stored_json() -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+    item = PlaylistTemplateItem.objects.create(
+        template=tmpl,
+        name='Board',
+        uri='https://example.com',
+        mimetype='webpage',
+        play_days='[1, 3, 5]',
+    )
+    assert item.get_play_days() == [1, 3, 5]
+
+
+@pytest.mark.django_db
+def test_playlist_template_placement_unique_per_item_and_player() -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+    item = PlaylistTemplateItem.objects.create(
+        template=tmpl,
+        name='Board',
+        uri='https://example.com',
+        mimetype='webpage',
+    )
+    player = Player(name='Lobby TV', base_url='http://192.168.1.50:8080')
+    player.set_api_token(_RAW_TOKEN)
+    player.save()
+
+    PlaylistTemplatePlacement.objects.create(
+        template=tmpl, item=item, player=player, remote_asset_id='abc'
+    )
+    with pytest.raises(IntegrityError):
+        PlaylistTemplatePlacement.objects.create(
+            template=tmpl, item=item, player=player, remote_asset_id='def'
+        )
+
+
+@pytest.mark.django_db
+def test_deleting_group_cascades_through_templates_items_and_placements() -> (
+    None
+):
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+    item = PlaylistTemplateItem.objects.create(
+        template=tmpl,
+        name='Board',
+        uri='https://example.com',
+        mimetype='webpage',
+    )
+    player = Player(name='Lobby TV', base_url='http://192.168.1.50:8080')
+    player.set_api_token(_RAW_TOKEN)
+    player.save()
+    PlaylistTemplatePlacement.objects.create(
+        template=tmpl, item=item, player=player, remote_asset_id='abc'
+    )
+
+    group.delete()
+
+    assert not PlaylistTemplate.objects.filter(pk=tmpl.pk).exists()
+    assert not PlaylistTemplateItem.objects.filter(pk=item.pk).exists()
+    assert not PlaylistTemplatePlacement.objects.filter(
+        item_id=item.pk
+    ).exists()
+    # The player itself is untouched — only template-side rows cascade.
+    assert Player.objects.filter(pk=player.pk).exists()

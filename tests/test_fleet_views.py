@@ -28,6 +28,11 @@ from anthias_server.fleet.models import (
     AssetPushJobTarget,
     Player,
     PlayerGroup,
+    PlaylistTemplate,
+    PlaylistTemplateItem,
+    PlaylistTemplatePlacement,
+    TemplateApplicationJob,
+    TemplateApplicationJobTarget,
 )
 from anthias_server.fleet.player_client import (
     PlayerAPIError,
@@ -965,7 +970,7 @@ def test_player_asset_push_creates_job_and_targets_and_enqueues(
 
     target_player_ids = set(job.targets.values_list('player_id', flat=True))
     assert target_player_ids == {target_a.id, target_b.id}
-    assert response.url == reverse(
+    assert response['Location'] == reverse(
         'anthias_fleet:push_job_status', args=[job.id]
     )
 
@@ -1099,3 +1104,484 @@ def test_push_job_status_partial_keeps_polling_while_pending(
     )
     assert response.status_code == 200
     assert 'hx-trigger="every 3s"' in response.content.decode()
+
+
+# ---------------------------------------------------------------------------
+# Playlist templates
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_list_renders(client: Client) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    PlaylistTemplate.objects.create(name='Menu', group=group)
+    response = client.get(reverse('anthias_fleet:template_list'))
+    assert response.status_code == 200
+    assert 'Menu' in response.content.decode()
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_new_get_renders_form_with_groups(client: Client) -> None:
+    PlayerGroup.objects.create(name='Lobby')
+    response = client.get(reverse('anthias_fleet:template_new'))
+    assert response.status_code == 200
+    assert 'Lobby' in response.content.decode()
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_new_post_creates_and_redirects_to_detail(
+    client: Client,
+) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    response = client.post(
+        reverse('anthias_fleet:template_new'),
+        {
+            'name': 'Menu',
+            'description': 'Daily specials',
+            'group': str(group.id),
+        },
+    )
+    assert response.status_code == 302
+    tmpl = PlaylistTemplate.objects.get(name='Menu')
+    assert tmpl.group_id == group.id
+    assert response['Location'] == reverse(
+        'anthias_fleet:template_detail', args=[tmpl.id]
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_new_post_rejects_missing_group(client: Client) -> None:
+    response = client.post(
+        reverse('anthias_fleet:template_new'), {'name': 'Menu', 'group': ''}
+    )
+    assert response.status_code == 200
+    assert not PlaylistTemplate.objects.filter(name='Menu').exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_new_post_rejects_duplicate_name(client: Client) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    PlaylistTemplate.objects.create(name='Menu', group=group)
+    response = client.post(
+        reverse('anthias_fleet:template_new'),
+        {'name': 'Menu', 'group': str(group.id)},
+    )
+    assert response.status_code == 200
+    assert PlaylistTemplate.objects.filter(name='Menu').count() == 1
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_edit_updates_name_and_description_not_group(
+    client: Client,
+) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+
+    response = client.post(
+        reverse('anthias_fleet:template_edit', args=[tmpl.id]),
+        {'name': 'Daily Menu', 'description': 'Updated'},
+    )
+    assert response.status_code == 302
+    tmpl.refresh_from_db()
+    assert tmpl.name == 'Daily Menu'
+    assert tmpl.description == 'Updated'
+    assert tmpl.group_id == group.id
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_delete_removes_template(client: Client) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+
+    response = client.post(
+        reverse('anthias_fleet:template_delete', args=[tmpl.id])
+    )
+    assert response.status_code == 302
+    assert not PlaylistTemplate.objects.filter(pk=tmpl.pk).exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_detail_renders_items(client: Client) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+    PlaylistTemplateItem.objects.create(
+        template=tmpl,
+        name='Board',
+        uri='https://example.com',
+        mimetype='webpage',
+    )
+    response = client.get(
+        reverse('anthias_fleet:template_detail', args=[tmpl.id])
+    )
+    assert response.status_code == 200
+    assert 'Board' in response.content.decode()
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_item_new_creates_item(client: Client) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+
+    response = client.post(
+        reverse('anthias_fleet:template_item_new', args=[tmpl.id]),
+        {
+            'name': 'Board',
+            'uri': 'https://example.com/board',
+            'mimetype': 'webpage',
+            'duration': '15',
+            'is_enabled': 'true',
+        },
+    )
+    assert response.status_code == 302
+    item = PlaylistTemplateItem.objects.get(template=tmpl)
+    assert item.name == 'Board'
+    assert item.uri == 'https://example.com/board'
+    assert item.duration == 15
+    assert item.is_enabled is True
+    assert item.play_days == ''  # all 7 selected in the form's default
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_item_new_rejects_invalid_url(client: Client) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+
+    response = client.post(
+        reverse('anthias_fleet:template_item_new', args=[tmpl.id]),
+        {'name': 'Board', 'uri': 'not-a-url'},
+    )
+    assert response.status_code == 200
+    assert not PlaylistTemplateItem.objects.filter(template=tmpl).exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_item_new_stores_partial_play_days_selection(
+    client: Client,
+) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+
+    response = client.post(
+        reverse('anthias_fleet:template_item_new', args=[tmpl.id]),
+        {
+            'name': 'Board',
+            'uri': 'https://example.com/board',
+            'mimetype': 'webpage',
+            'play_days': ['1', '3', '5'],
+        },
+    )
+    assert response.status_code == 302
+    item = PlaylistTemplateItem.objects.get(template=tmpl)
+    assert item.get_play_days() == [1, 3, 5]
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_item_edit_updates_fields(client: Client) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+    item = PlaylistTemplateItem.objects.create(
+        template=tmpl,
+        name='Board',
+        uri='https://example.com',
+        mimetype='webpage',
+    )
+
+    response = client.post(
+        reverse('anthias_fleet:template_item_edit', args=[tmpl.id, item.id]),
+        {
+            'name': 'Updated Board',
+            'uri': 'https://example.com/updated',
+            'mimetype': 'webpage',
+            'duration': '20',
+            'is_enabled': 'true',
+        },
+    )
+    assert response.status_code == 302
+    item.refresh_from_db()
+    assert item.name == 'Updated Board'
+    assert item.uri == 'https://example.com/updated'
+    assert item.duration == 20
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_item_delete_orphans_placement_instead_of_deleting_it(
+    client: Client,
+) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+    item = PlaylistTemplateItem.objects.create(
+        template=tmpl,
+        name='Board',
+        uri='https://example.com',
+        mimetype='webpage',
+    )
+    player = _make_player(name='A', group=group)
+    placement = PlaylistTemplatePlacement.objects.create(
+        template=tmpl, item=item, player=player, remote_asset_id='remote-1'
+    )
+
+    response = client.post(
+        reverse('anthias_fleet:template_item_delete', args=[tmpl.id, item.id])
+    )
+    assert response.status_code == 302
+    assert not PlaylistTemplateItem.objects.filter(pk=item.pk).exists()
+    placement.refresh_from_db()
+    assert placement.item_id is None
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_item_move_swaps_order(client: Client) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+    item_a = PlaylistTemplateItem.objects.create(
+        template=tmpl,
+        name='A',
+        uri='https://example.com/a',
+        mimetype='webpage',
+        order=0,
+    )
+    item_b = PlaylistTemplateItem.objects.create(
+        template=tmpl,
+        name='B',
+        uri='https://example.com/b',
+        mimetype='webpage',
+        order=1,
+    )
+
+    response = client.post(
+        reverse(
+            'anthias_fleet:template_item_move', args=[tmpl.id, item_b.id, 'up']
+        )
+    )
+    assert response.status_code == 302
+    item_a.refresh_from_db()
+    item_b.refresh_from_db()
+    assert item_b.order < item_a.order
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_apply_creates_job_and_targets_and_enqueues(
+    client: Client,
+) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+    member_a = _make_player(name='A', group=group)
+    member_b = _make_player(name='B', group=group)
+
+    with mock.patch(
+        'anthias_server.fleet.views.apply_playlist_template.delay'
+    ) as mock_delay:
+        response = client.post(
+            reverse('anthias_fleet:template_apply', args=[tmpl.id])
+        )
+
+    assert response.status_code == 302
+    job = TemplateApplicationJob.objects.get(template=tmpl)
+    mock_delay.assert_called_once_with(job.id)
+    target_player_ids = set(job.targets.values_list('player_id', flat=True))
+    assert target_player_ids == {member_a.id, member_b.id}
+    assert response['Location'] == reverse(
+        'anthias_fleet:template_job_status', args=[job.id]
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_apply_noop_when_group_has_no_players(
+    client: Client,
+) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+
+    with mock.patch(
+        'anthias_server.fleet.views.apply_playlist_template.delay'
+    ) as mock_delay:
+        response = client.post(
+            reverse('anthias_fleet:template_apply', args=[tmpl.id])
+        )
+
+    assert response.status_code == 302
+    assert not TemplateApplicationJob.objects.exists()
+    mock_delay.assert_not_called()
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_job_status_partial_stops_polling_when_all_done(
+    client: Client,
+) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+    player = _make_player(name='A', group=group)
+    job = TemplateApplicationJob.objects.create(template=tmpl)
+    TemplateApplicationJobTarget.objects.create(
+        job=job,
+        player=player,
+        status=TemplateApplicationJobTarget.STATUS_SUCCESS,
+    )
+
+    response = client.get(
+        reverse('anthias_fleet:template_job_status_partial', args=[job.id])
+    )
+    assert response.status_code == 200
+    assert 'hx-trigger' not in response.content.decode()
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_template_job_status_partial_keeps_polling_while_pending(
+    client: Client,
+) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+    player = _make_player(name='A', group=group)
+    job = TemplateApplicationJob.objects.create(template=tmpl)
+    TemplateApplicationJobTarget.objects.create(job=job, player=player)
+
+    response = client.get(
+        reverse('anthias_fleet:template_job_status_partial', args=[job.id])
+    )
+    assert response.status_code == 200
+    assert 'hx-trigger="every 3s"' in response.content.decode()
+
+
+# ---------------------------------------------------------------------------
+# Group-membership hooks: join/leave template materialization
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_player_new_into_a_group_enqueues_its_templates(
+    client: Client,
+) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    PlaylistTemplate.objects.create(name='Menu', group=group)
+
+    with (
+        mock.patch(
+            'anthias_server.fleet.views.PlayerAPIClient.get_info',
+            return_value={},
+        ),
+        mock.patch(
+            'anthias_server.fleet.views.apply_playlist_template_to_player.delay'
+        ) as mock_delay,
+    ):
+        response = client.post(
+            reverse('anthias_fleet:player_new'),
+            {
+                'name': 'New TV',
+                'base_url': 'http://192.168.1.60:8080',
+                'api_token': _RAW_TOKEN,
+                'group': str(group.id),
+            },
+        )
+
+    assert response.status_code == 302
+    mock_delay.assert_called_once()
+    player = Player.objects.get(name='New TV')
+    job_target = TemplateApplicationJobTarget.objects.get(player=player)
+    assert mock_delay.call_args.args[0] == job_target.id
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_player_edit_group_change_untracks_old_placements(
+    client: Client,
+) -> None:
+    old_group = PlayerGroup.objects.create(name='Lobby')
+    new_group = PlayerGroup.objects.create(name='Warehouse')
+    old_tmpl = PlaylistTemplate.objects.create(name='Menu', group=old_group)
+    old_item = PlaylistTemplateItem.objects.create(
+        template=old_tmpl,
+        name='Board',
+        uri='https://example.com',
+        mimetype='webpage',
+    )
+    player = _make_player(name='A', group=old_group)
+    PlaylistTemplatePlacement.objects.create(
+        template=old_tmpl,
+        item=old_item,
+        player=player,
+        remote_asset_id='remote-1',
+    )
+
+    with mock.patch(
+        'anthias_server.fleet.views.apply_playlist_template_to_player.delay'
+    ):
+        response = client.post(
+            reverse('anthias_fleet:player_edit', args=[player.id]),
+            {
+                'name': 'A',
+                'base_url': player.base_url,
+                'group': str(new_group.id),
+            },
+        )
+
+    assert response.status_code == 302
+    assert not PlaylistTemplatePlacement.objects.filter(
+        template=old_tmpl, player=player
+    ).exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_player_edit_same_group_does_not_untrack_placements(
+    client: Client,
+) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    tmpl = PlaylistTemplate.objects.create(name='Menu', group=group)
+    item = PlaylistTemplateItem.objects.create(
+        template=tmpl,
+        name='Board',
+        uri='https://example.com',
+        mimetype='webpage',
+    )
+    player = _make_player(name='A', group=group)
+    PlaylistTemplatePlacement.objects.create(
+        template=tmpl, item=item, player=player, remote_asset_id='remote-1'
+    )
+
+    with mock.patch(
+        'anthias_server.fleet.views.apply_playlist_template_to_player.delay'
+    ) as mock_delay:
+        response = client.post(
+            reverse('anthias_fleet:player_edit', args=[player.id]),
+            {
+                'name': 'A',
+                'base_url': player.base_url,
+                'group': str(group.id),
+            },
+        )
+
+    assert response.status_code == 302
+    mock_delay.assert_not_called()
+    assert PlaylistTemplatePlacement.objects.filter(
+        template=tmpl, player=player
+    ).exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_group_list_warns_about_templates_before_delete(
+    client: Client,
+) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    PlaylistTemplate.objects.create(name='Menu', group=group)
+    response = client.get(reverse('anthias_fleet:group_list'))
+    assert response.status_code == 200
+    body = response.content.decode()
+    assert 'This also deletes 1 template' in body

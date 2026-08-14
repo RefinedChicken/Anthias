@@ -1,0 +1,74 @@
+{% extends "_layout.html" %}
+
+{% block title %}Fleet · Templates{% endblock %}
+
+{% block main %}
+<div class="app-container">
+  <div class="page-header-bar">
+    <div class="page-header-bar__title">
+      <h1 class="page-header">Templates</h1>
+      <p class="page-header-bar__lede">Define content once, apply it across a group.</p>
+    </div>
+    <div class="page-header-bar__actions">
+      <a href="{% url 'anthias_fleet:template_new' %}" class="app-btn app-btn-primary app-btn-pill">
+        <i class="ti ti-plus"></i><span>Add Template</span>
+      </a>
+    </div>
+  </div>
+
+  {% comment %}Flash messages are emitted as toasts by _toasts.html (vendor.ts drainDjangoMessages()).{% endcomment %}
+
+  <section class="surface">
+    <header class="surface__header">
+      <div class="surface__header-left">
+        <h2><i class="ti ti-playlist mr-2"></i>Templates</h2>
+      </div>
+      <span class="surface__count">{{ templates|length }} template{{ templates|length|pluralize }}</span>
+    </header>
+
+    {% if templates %}
+    <table class="asset-table">
+      <thead>
+        <tr>
+          <th scope="col">Name</th>
+          <th scope="col">Group</th>
+          <th scope="col">Items</th>
+          <th scope="col" class="text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for tmpl in templates %}
+        <tr>
+          <td data-label="Name">
+            <a href="{% url 'anthias_fleet:template_detail' tmpl.id %}">{{ tmpl.name }}</a>
+            {% if tmpl.description %}<div class="muted-label">{{ tmpl.description }}</div>{% endif %}
+          </td>
+          <td data-label="Group">{{ tmpl.group.name }}</td>
+          <td data-label="Items">{{ tmpl.item_count }}</td>
+          <td class="text-right" data-label="Actions">
+            <div class="action-group">
+              <a href="{% url 'anthias_fleet:template_detail' tmpl.id %}" class="app-btn app-btn-icon" title="View">
+                <i class="ti ti-eye"></i>
+              </a>
+              <a href="{% url 'anthias_fleet:template_edit' tmpl.id %}" class="app-btn app-btn-icon" title="Edit">
+                <i class="ti ti-pencil"></i>
+              </a>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-state__icon"><i class="ti ti-playlist"></i></div>
+      <p class="empty-state__title">No templates yet</p>
+      <p class="empty-state__description">Create a template to define content once and apply it across a group of players.</p>
+      <a href="{% url 'anthias_fleet:template_new' %}" class="empty-state__action">
+        <i class="ti ti-plus mr-1"></i>Add Template
+      </a>
+    </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

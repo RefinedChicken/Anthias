@@ -1,0 +1,97 @@
+{% extends "_layout.html" %}
+{% load humanize %}
+
+{% block title %}Fleet · {{ template_obj.name }}{% endblock %}
+
+{% block main %}
+<div class="app-container">
+  <div class="page-header-bar">
+    <div class="page-header-bar__title">
+      <h1 class="page-header">{{ template_obj.name }}</h1>
+      <p class="page-header-bar__lede">
+        Applied to group "{{ template_obj.group.name }}".
+        {% if template_obj.description %}{{ template_obj.description }}{% endif %}
+      </p>
+    </div>
+    <div class="page-header-bar__actions">
+      <a href="{% url 'anthias_fleet:template_edit' template_obj.id %}" class="app-btn app-btn-outline-dark app-btn-pill">
+        <i class="ti ti-pencil"></i><span>Edit</span>
+      </a>
+      <form method="post" action="{% url 'anthias_fleet:template_apply' template_obj.id %}" class="inline m-0">
+        {% csrf_token %}
+        <button type="submit" class="app-btn app-btn-primary app-btn-pill">
+          <i class="ti ti-send"></i><span>Apply to group</span>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  {% comment %}Flash messages are emitted as toasts by _toasts.html (vendor.ts drainDjangoMessages()).{% endcomment %}
+
+  <section class="surface mb-4">
+    <header class="surface__header">
+      <div class="surface__header-left">
+        <h2><i class="ti ti-list mr-2"></i>Items</h2>
+      </div>
+      <a href="{% url 'anthias_fleet:template_item_new' template_obj.id %}" class="app-btn app-btn-primary app-btn-pill">
+        <i class="ti ti-plus"></i><span>Add item</span>
+      </a>
+    </header>
+
+    {% if items %}
+    <table class="asset-table">
+      <thead>
+        <tr>
+          <th scope="col">Name</th>
+          <th scope="col">Duration</th>
+          <th scope="col">Enabled</th>
+          <th scope="col" class="text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        {% include "fleet/_template_item_row.html" with item=item template_obj=template_obj forloop_first=forloop.first forloop_last=forloop.last %}
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-state__icon"><i class="ti ti-list"></i></div>
+      <p class="empty-state__title">No items yet</p>
+      <p class="empty-state__description">Add an item, then apply the template to push it across "{{ template_obj.group.name }}".</p>
+      <a href="{% url 'anthias_fleet:template_item_new' template_obj.id %}" class="empty-state__action">
+        <i class="ti ti-plus mr-1"></i>Add item
+      </a>
+    </div>
+    {% endif %}
+  </section>
+
+  {% if recent_jobs %}
+  <section class="surface">
+    <header class="surface__header">
+      <div class="surface__header-left">
+        <h2><i class="ti ti-history mr-2"></i>Recent applies</h2>
+      </div>
+    </header>
+    <table class="asset-table">
+      <thead>
+        <tr>
+          <th scope="col">When</th>
+          <th scope="col"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in recent_jobs %}
+        <tr>
+          <td data-label="When">{{ job.created_at|naturaltime }}</td>
+          <td>
+            <a href="{% url 'anthias_fleet:template_job_status' job.id %}" class="app-btn app-btn-link">View status</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

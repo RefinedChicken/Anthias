@@ -105,4 +105,56 @@ urlpatterns = [
         views.group_delete,
         name='group_delete',
     ),
+    path('templates/', views.template_list, name='template_list'),
+    path('templates/new/', views.template_new, name='template_new'),
+    path(
+        'templates/<int:template_id>/',
+        views.template_detail,
+        name='template_detail',
+    ),
+    path(
+        'templates/<int:template_id>/edit/',
+        views.template_edit,
+        name='template_edit',
+    ),
+    path(
+        'templates/<int:template_id>/delete/',
+        views.template_delete,
+        name='template_delete',
+    ),
+    path(
+        'templates/<int:template_id>/apply/',
+        views.template_apply,
+        name='template_apply',
+    ),
+    path(
+        'templates/<int:template_id>/items/new/',
+        views.template_item_new,
+        name='template_item_new',
+    ),
+    path(
+        'templates/<int:template_id>/items/<int:item_id>/edit/',
+        views.template_item_edit,
+        name='template_item_edit',
+    ),
+    path(
+        'templates/<int:template_id>/items/<int:item_id>/delete/',
+        views.template_item_delete,
+        name='template_item_delete',
+    ),
+    path(
+        'templates/<int:template_id>/items/<int:item_id>/move/<str:direction>/',
+        views.template_item_move,
+        name='template_item_move',
+    ),
+    path(
+        'template-jobs/<int:job_id>/',
+        views.template_job_status,
+        name='template_job_status',
+    ),
+    path(
+        'template-jobs/<int:job_id>/_partials/status/',
+        views.template_job_status_partial,
+        name='template_job_status_partial',
+    ),
 ]

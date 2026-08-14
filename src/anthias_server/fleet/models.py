@@ -1,4 +1,5 @@
-from typing import ClassVar
+import json
+from typing import ClassVar, cast
 
 from django.db import models
 
@@ -184,4 +185,171 @@ class AssetPushJobTarget(models.Model):
 
     class Meta:
         db_table = 'fleet_asset_push_job_targets'
+        ordering: ClassVar[list[str]] = ['player__name']
+
+
+class PlaylistTemplate(models.Model):
+    """A named, ordered set of URI-based items (webpage, or a remote
+    image/video URL — no locally-uploaded file content in this first
+    cut, see PlaylistTemplateItem) associated with one PlayerGroup.
+    "Apply to group" materializes the items onto every member's own
+    playlist via PlaylistTemplatePlacement below; editing a template
+    does NOT auto-reapply to already-member players — that stays an
+    explicit action so a mid-edit save can't push a half-finished
+    template.
+    """
+
+    name = models.TextField(unique=True)
+    description = models.TextField(blank=True)
+    group = models.ForeignKey(
+        PlayerGroup,
+        on_delete=models.CASCADE,
+        related_name='playlist_templates',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'fleet_playlist_templates'
+        ordering: ClassVar[list[str]] = ['name']
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class PlaylistTemplateItem(models.Model):
+    template = models.ForeignKey(
+        PlaylistTemplate, on_delete=models.CASCADE, related_name='items'
+    )
+    name = models.TextField()
+    uri = models.URLField()
+    mimetype = models.CharField(
+        max_length=16,
+        choices=[
+            ('image', 'Image'),
+            ('video', 'Video'),
+            ('webpage', 'Webpage'),
+        ],
+    )
+    duration = models.PositiveIntegerField(default=10)
+    order = models.PositiveIntegerField(default=0)
+    is_enabled = models.BooleanField(default=True)
+    # JSON-encoded list[int] (1=Monday..7=Sunday, same convention as
+    # CreateAssetSerializerV2.play_days / _normalise_play_days) — ''
+    # means "every day".
+    play_days = models.TextField(blank=True)
+    play_time_from = models.TimeField(null=True, blank=True)
+    play_time_to = models.TimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'fleet_playlist_template_items'
+        ordering: ClassVar[list[str]] = ['order']
+
+    def __str__(self) -> str:
+        return self.name
+
+    def get_play_days(self) -> list[int]:
+        """Parse play_days into the stored list of ints (1-7), or every
+        day if blank — mirrors Asset.get_play_days()'s "'' means every
+        day" contract, minus that method's malformed-JSON fallback
+        since this field is only ever written by _parse_play_days()."""
+        if not self.play_days:
+            return list(range(1, 8))
+        return cast('list[int]', json.loads(self.play_days))
+
+
+class PlaylistTemplatePlacement(models.Model):
+    """Fleet-side-only tracking of which remote asset_id on which
+    player materializes which template item — substitutes for
+    metadata-tagging, which isn't viable: CreateAssetSerializerV2/
+    UpdateAssetSerializerV2 (api/serializers/v2.py) don't accept
+    arbitrary ``metadata``, only refresh_interval_s/custom_headers
+    round-trip. Materialization only ever creates/updates/deletes
+    assets tracked here for a given (item, player) pair — it never
+    touches anything else on the player, which is what lets
+    template-managed and locally-managed assets coexist.
+
+    ``item`` is SET_NULL (not CASCADE) deliberately: deleting a
+    template item must not silently drop its placements, or the next
+    "Apply to group" would have no record left to prune the
+    now-orphaned remote copy from each player — it would just leak
+    forever. A placement with ``item=None`` is exactly the signal the
+    materialization task's prune step looks for. ``template`` is kept
+    as its own FK (not derived via ``item.template``) so it still
+    resolves once ``item`` is null, and so deleting the whole template
+    still cascades every placement away regardless of per-item state.
+    """
+
+    template = models.ForeignKey(
+        PlaylistTemplate,
+        on_delete=models.CASCADE,
+        related_name='placements',
+    )
+    item = models.ForeignKey(
+        PlaylistTemplateItem,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='placements',
+    )
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name='+'
+    )
+    remote_asset_id = models.TextField()
+    last_applied_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'fleet_playlist_template_placements'
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=['item', 'player'],
+                name='unique_placement_per_item_player',
+            )
+        ]
+
+
+class TemplateApplicationJob(models.Model):
+    """Deliberately not sharing a base class with AssetPushJob despite
+    the structural similarity — matches this codebase's existing
+    low-abstraction style (players_bulk_action/player_assets_bulk_action
+    are two independent loops, not one generic helper)."""
+
+    template = models.ForeignKey(
+        PlaylistTemplate,
+        on_delete=models.CASCADE,
+        related_name='application_jobs',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'fleet_template_application_jobs'
+        ordering: ClassVar[list[str]] = ['-created_at']
+
+
+class TemplateApplicationJobTarget(models.Model):
+    STATUS_PENDING = 'pending'
+    STATUS_SUCCESS = 'success'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES: ClassVar[list[tuple[str, str]]] = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_SUCCESS, 'Success'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+
+    job = models.ForeignKey(
+        TemplateApplicationJob,
+        on_delete=models.CASCADE,
+        related_name='targets',
+    )
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name='+'
+    )
+    status = models.CharField(
+        max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING
+    )
+    error = models.TextField(blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'fleet_template_application_job_targets'
         ordering: ClassVar[list[str]] = ['player__name']

@@ -22,7 +22,7 @@ from django.conf import settings as django_settings
 from django.contrib import messages
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import URLValidator
-from django.db.models import Count
+from django.db.models import Count, Max
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -42,13 +42,22 @@ from anthias_server.fleet.models import (
     AssetPushJobTarget,
     Player,
     PlayerGroup,
+    PlaylistTemplate,
+    PlaylistTemplateItem,
+    PlaylistTemplatePlacement,
+    TemplateApplicationJob,
+    TemplateApplicationJobTarget,
 )
 from anthias_server.fleet.player_client import (
     PlayerAPIClient,
     PlayerAPIError,
     PlayerUnreachableError,
 )
-from anthias_server.fleet.tasks import push_asset_to_group
+from anthias_server.fleet.tasks import (
+    apply_playlist_template,
+    apply_playlist_template_to_player,
+    push_asset_to_group,
+)
 from anthias_server.lib.auth import authorized
 
 if TYPE_CHECKING:
@@ -119,6 +128,43 @@ def player_table_partial(request: HttpRequest) -> HttpResponse:
     return render(request, 'fleet/_player_table.html', _player_list_context())
 
 
+def _enqueue_group_join_templates(player: Player) -> None:
+    """New group membership (a fresh registration into a group, or an
+    existing player's group changing to one): materialize every one of
+    the group's playlist templates onto this player. Safe either way —
+    a brand-new player, or a player with no placements for this
+    group's templates yet, both start from zero. One
+    TemplateApplicationJob per template (not per player) so it shows
+    up in that template's own job history alongside group-wide
+    applies."""
+    if player.group is None:
+        return
+    for tmpl in player.group.playlist_templates.all():
+        job = TemplateApplicationJob.objects.create(template=tmpl)
+        job_target = TemplateApplicationJobTarget.objects.create(
+            job=job, player=player
+        )
+        apply_playlist_template_to_player.delay(job_target.id)
+
+
+def _untrack_group_templates(player: Player, old_group_id: int | None) -> int:
+    """Group change/removal: drop this player's placement tracking for
+    the *old* group's templates. Already-materialized assets are left
+    on the player — least destructive default, an operator
+    reorganising groups shouldn't silently lose content — only the
+    fleet-side tracking (and therefore future updates/pruning from
+    that template) is dropped. Returns the count dropped, for an
+    operator-facing message."""
+    if old_group_id is None:
+        return 0
+    qs = PlaylistTemplatePlacement.objects.filter(
+        player=player, template__group_id=old_group_id
+    )
+    count = qs.count()
+    qs.delete()
+    return count
+
+
 @authorized
 @require_http_methods(['GET', 'POST'])
 def player_new(request: HttpRequest) -> HttpResponse:
@@ -172,6 +218,7 @@ def player_new(request: HttpRequest) -> HttpResponse:
     if group_id:
         candidate.group = PlayerGroup.objects.filter(pk=group_id).first()
     candidate.save()
+    _enqueue_group_join_templates(candidate)
 
     messages.success(request, f'Registered player "{name}".')
     return redirect(reverse('anthias_fleet:player_list'))
@@ -212,6 +259,7 @@ def player_edit(request: HttpRequest, player_id: int) -> HttpResponse:
             {'player': player, 'groups': groups},
         )
 
+    old_group_id = player.group_id
     player.name = name
     player.base_url = base_url
     player.skip_ssl_verify = skip_ssl_verify
@@ -224,6 +272,17 @@ def player_edit(request: HttpRequest, player_id: int) -> HttpResponse:
     if api_token:
         player.set_api_token(api_token)
     player.save()
+
+    if player.group_id != old_group_id:
+        untracked = _untrack_group_templates(player, old_group_id)
+        _enqueue_group_join_templates(player)
+        if untracked:
+            messages.info(
+                request,
+                f'{untracked} template-managed asset'
+                f'{_pluralize(untracked)} left in place on "{name}" but '
+                "no longer tracked by its old group's templates.",
+            )
 
     messages.success(request, f'Updated "{name}".')
     return redirect(reverse('anthias_fleet:player_detail', args=[player.pk]))
@@ -980,7 +1039,10 @@ def player_assets_bulk_action(
 @authorized
 @require_http_methods(['GET'])
 def group_list(request: HttpRequest) -> HttpResponse:
-    groups = PlayerGroup.objects.annotate(player_count=Count('players'))
+    groups = PlayerGroup.objects.annotate(
+        player_count=Count('players', distinct=True),
+        template_count=Count('playlist_templates', distinct=True),
+    )
     return template(
         request,
         'fleet/group_list.html',
@@ -1061,3 +1123,428 @@ def group_delete(request: HttpRequest, group_id: int) -> HttpResponse:
     group.delete()
     messages.success(request, f'Deleted group "{name}".')
     return redirect(reverse('anthias_fleet:group_list'))
+
+
+# ---------------------------------------------------------------------------
+# Playlist templates — content defined once, applied across a group.
+# V1 scope: items are URI-based only (webpage, or a remote image/video
+# URL) — locally-uploaded file content as a template item isn't built
+# here, it would need the same stage/upload machinery as bulk push,
+# per item, per group member.
+
+
+@authorized
+@require_http_methods(['GET'])
+def template_list(request: HttpRequest) -> HttpResponse:
+    templates = PlaylistTemplate.objects.select_related('group').annotate(
+        item_count=Count('items')
+    )
+    return template(
+        request,
+        'fleet/template_list.html',
+        {'templates': templates, 'active_nav': 'templates'},
+    )
+
+
+@authorized
+@require_http_methods(['GET', 'POST'])
+def template_new(request: HttpRequest) -> HttpResponse:
+    groups = PlayerGroup.objects.all()
+    if request.method == 'GET':
+        return template(
+            request,
+            'fleet/template_form.html',
+            {'groups': groups, 'active_nav': 'templates'},
+        )
+
+    name = (request.POST.get('name') or '').strip()
+    description = (request.POST.get('description') or '').strip()
+    group_id = request.POST.get('group') or ''
+
+    def _redisplay() -> HttpResponse:
+        return template(
+            request,
+            'fleet/template_form.html',
+            {
+                'groups': groups,
+                'form_values': request.POST,
+                'active_nav': 'templates',
+            },
+        )
+
+    if not name or not group_id:
+        messages.error(request, 'Name and group are required.')
+        return _redisplay()
+    if PlaylistTemplate.objects.filter(name=name).exists():
+        messages.error(request, f'A template named "{name}" already exists.')
+        return _redisplay()
+
+    group = get_object_or_404(PlayerGroup, pk=group_id)
+    playlist_template = PlaylistTemplate.objects.create(
+        name=name, description=description, group=group
+    )
+    messages.success(request, f'Created template "{name}".')
+    return redirect(
+        reverse('anthias_fleet:template_detail', args=[playlist_template.pk])
+    )
+
+
+@authorized
+@require_http_methods(['GET', 'POST'])
+def template_edit(request: HttpRequest, template_id: int) -> HttpResponse:
+    # Group is deliberately not editable here — reassigning a
+    # template's group after creation raises under-specified questions
+    # (do old members lose tracking? do new members get applied
+    # automatically?) that the confirmed Phase 2 scope never designed
+    # an answer for. Delete and recreate under the new group instead.
+    playlist_template = get_object_or_404(PlaylistTemplate, pk=template_id)
+    if request.method == 'GET':
+        return template(
+            request,
+            'fleet/template_form.html',
+            {
+                'template_obj': playlist_template,
+                'active_nav': 'templates',
+            },
+        )
+
+    name = (request.POST.get('name') or '').strip()
+    description = (request.POST.get('description') or '').strip()
+
+    if not name:
+        messages.error(request, 'Name is required.')
+        return template(
+            request,
+            'fleet/template_form.html',
+            {'template_obj': playlist_template, 'active_nav': 'templates'},
+        )
+    if (
+        PlaylistTemplate.objects.exclude(pk=playlist_template.pk)
+        .filter(name=name)
+        .exists()
+    ):
+        messages.error(request, f'A template named "{name}" already exists.')
+        return template(
+            request,
+            'fleet/template_form.html',
+            {'template_obj': playlist_template, 'active_nav': 'templates'},
+        )
+
+    playlist_template.name = name
+    playlist_template.description = description
+    playlist_template.save()
+    messages.success(request, f'Updated "{name}".')
+    return redirect(
+        reverse('anthias_fleet:template_detail', args=[playlist_template.pk])
+    )
+
+
+@authorized
+@require_http_methods(['POST'])
+def template_delete(request: HttpRequest, template_id: int) -> HttpResponse:
+    playlist_template = get_object_or_404(PlaylistTemplate, pk=template_id)
+    name = playlist_template.name
+    # CASCADE drops items + placements — materialized assets are left
+    # on every player, same "leave content, drop tracking" posture as
+    # a player leaving the group (see _untrack_group_templates).
+    playlist_template.delete()
+    messages.success(request, f'Deleted template "{name}".')
+    return redirect(reverse('anthias_fleet:template_list'))
+
+
+def _template_detail_context(
+    playlist_template: PlaylistTemplate,
+) -> dict[str, Any]:
+    return {
+        'template_obj': playlist_template,
+        'items': list(playlist_template.items.all()),
+        'recent_jobs': list(
+            playlist_template.application_jobs.prefetch_related(
+                'targets__player'
+            )[:5]
+        ),
+        'active_nav': 'templates',
+    }
+
+
+@authorized
+@require_http_methods(['GET'])
+def template_detail(request: HttpRequest, template_id: int) -> HttpResponse:
+    playlist_template = get_object_or_404(PlaylistTemplate, pk=template_id)
+    return template(
+        request,
+        'fleet/template_detail.html',
+        _template_detail_context(playlist_template),
+    )
+
+
+def _parse_play_days(request: HttpRequest) -> str:
+    """Multi-checkbox 'play_days' POST values (1=Monday..7=Sunday,
+    same convention as CreateAssetSerializerV2) -> the model's
+    JSON-encoded storage. All 7 selected (or none — the "every day"
+    default) stores as '' rather than a literal [1,2,3,4,5,6,7]."""
+    selected = sorted(
+        {int(d) for d in request.POST.getlist('play_days') if d.isdigit()}
+    )
+    if not selected or selected == list(range(1, 8)):
+        return ''
+    return json.dumps(selected)
+
+
+def _parse_play_time(
+    request: HttpRequest,
+) -> tuple[str, str] | tuple[None, None]:
+    """Both-or-neither, mirroring _validate_time_window's server-side
+    rule — returns (None, None) if either side is blank."""
+    time_from = (request.POST.get('play_time_from') or '').strip()
+    time_to = (request.POST.get('play_time_to') or '').strip()
+    if not time_from or not time_to:
+        return None, None
+    return time_from, time_to
+
+
+@authorized
+@require_http_methods(['GET', 'POST'])
+def template_item_new(request: HttpRequest, template_id: int) -> HttpResponse:
+    playlist_template = get_object_or_404(PlaylistTemplate, pk=template_id)
+    if request.method == 'GET':
+        return template(
+            request,
+            'fleet/template_item_form.html',
+            {'template_obj': playlist_template, 'active_nav': 'templates'},
+        )
+
+    name = (request.POST.get('name') or '').strip()
+    uri = (request.POST.get('uri') or '').strip()
+    mimetype = request.POST.get('mimetype') or 'webpage'
+    if mimetype not in ('image', 'video', 'webpage'):
+        mimetype = 'webpage'
+    try:
+        duration = max(0, int(request.POST.get('duration') or 10))
+    except (TypeError, ValueError):
+        duration = 10
+
+    def _redisplay() -> HttpResponse:
+        return template(
+            request,
+            'fleet/template_item_form.html',
+            {
+                'template_obj': playlist_template,
+                'form_values': request.POST,
+                'active_nav': 'templates',
+            },
+        )
+
+    if not name or not uri:
+        messages.error(request, 'Name and URL are required.')
+        return _redisplay()
+    try:
+        _url_validator(uri)
+    except DjangoValidationError:
+        messages.error(request, f'"{uri}" is not a valid URL.')
+        return _redisplay()
+
+    play_time_from, play_time_to = _parse_play_time(request)
+    max_order = playlist_template.items.aggregate(m=Max('order'))['m']
+    next_order = 0 if max_order is None else max_order + 1
+    PlaylistTemplateItem.objects.create(
+        template=playlist_template,
+        name=name,
+        uri=uri,
+        mimetype=mimetype,
+        duration=duration,
+        order=next_order,
+        is_enabled=_checkbox(request, 'is_enabled'),
+        play_days=_parse_play_days(request),
+        play_time_from=play_time_from,
+        play_time_to=play_time_to,
+    )
+    messages.success(request, f'Added "{name}" to the template.')
+    return redirect(
+        reverse('anthias_fleet:template_detail', args=[playlist_template.pk])
+    )
+
+
+@authorized
+@require_http_methods(['GET', 'POST'])
+def template_item_edit(
+    request: HttpRequest, template_id: int, item_id: int
+) -> HttpResponse:
+    playlist_template = get_object_or_404(PlaylistTemplate, pk=template_id)
+    item = get_object_or_404(
+        PlaylistTemplateItem, pk=item_id, template=playlist_template
+    )
+    if request.method == 'GET':
+        return template(
+            request,
+            'fleet/template_item_form.html',
+            {
+                'template_obj': playlist_template,
+                'item': item,
+                'active_nav': 'templates',
+            },
+        )
+
+    name = (request.POST.get('name') or '').strip()
+    uri = (request.POST.get('uri') or '').strip()
+    mimetype = request.POST.get('mimetype') or 'webpage'
+    if mimetype not in ('image', 'video', 'webpage'):
+        mimetype = 'webpage'
+    try:
+        duration = max(0, int(request.POST.get('duration') or 10))
+    except (TypeError, ValueError):
+        duration = 10
+
+    def _redisplay() -> HttpResponse:
+        return template(
+            request,
+            'fleet/template_item_form.html',
+            {
+                'template_obj': playlist_template,
+                'item': item,
+                'active_nav': 'templates',
+            },
+        )
+
+    if not name or not uri:
+        messages.error(request, 'Name and URL are required.')
+        return _redisplay()
+    try:
+        _url_validator(uri)
+    except DjangoValidationError:
+        messages.error(request, f'"{uri}" is not a valid URL.')
+        return _redisplay()
+
+    play_time_from, play_time_to = _parse_play_time(request)
+    item.name = name
+    item.uri = uri
+    item.mimetype = mimetype
+    item.duration = duration
+    item.is_enabled = _checkbox(request, 'is_enabled')
+    item.play_days = _parse_play_days(request)
+    item.play_time_from = play_time_from
+    item.play_time_to = play_time_to
+    item.save()
+
+    messages.success(request, f'Updated "{name}".')
+    return redirect(
+        reverse('anthias_fleet:template_detail', args=[playlist_template.pk])
+    )
+
+
+@authorized
+@require_http_methods(['POST'])
+def template_item_delete(
+    request: HttpRequest, template_id: int, item_id: int
+) -> HttpResponse:
+    playlist_template = get_object_or_404(PlaylistTemplate, pk=template_id)
+    item = get_object_or_404(
+        PlaylistTemplateItem, pk=item_id, template=playlist_template
+    )
+    name = item.name
+    # Materialized copies on group members are pruned the next time
+    # the template is (re-)applied, not deleted immediately here —
+    # consistent with edits never auto-reapplying.
+    item.delete()
+    messages.success(
+        request, f'Removed "{name}" — apply the template to update players.'
+    )
+    return redirect(
+        reverse('anthias_fleet:template_detail', args=[playlist_template.pk])
+    )
+
+
+@authorized
+@require_http_methods(['POST'])
+def template_item_move(
+    request: HttpRequest, template_id: int, item_id: int, direction: str
+) -> HttpResponse:
+    if direction not in ('up', 'down'):
+        raise Http404('Unknown move direction.')
+    playlist_template = get_object_or_404(PlaylistTemplate, pk=template_id)
+    items = list(playlist_template.items.all())
+    ids = [i.pk for i in items]
+    if item_id not in ids:
+        raise Http404('Item not found.')
+
+    idx = ids.index(item_id)
+    swap_with = idx - 1 if direction == 'up' else idx + 1
+    if 0 <= swap_with < len(ids):
+        items[idx].order, items[swap_with].order = (
+            items[swap_with].order,
+            items[idx].order,
+        )
+        items[idx].save(update_fields=['order'])
+        items[swap_with].save(update_fields=['order'])
+    return redirect(
+        reverse('anthias_fleet:template_detail', args=[playlist_template.pk])
+    )
+
+
+@authorized
+@require_http_methods(['POST'])
+def template_apply(request: HttpRequest, template_id: int) -> HttpResponse:
+    playlist_template = get_object_or_404(PlaylistTemplate, pk=template_id)
+    members = list(playlist_template.group.players.all())
+    if not members:
+        messages.info(
+            request,
+            f'"{playlist_template.group.name}" has no players to apply to.',
+        )
+        return redirect(
+            reverse(
+                'anthias_fleet:template_detail', args=[playlist_template.pk]
+            )
+        )
+
+    job = TemplateApplicationJob.objects.create(template=playlist_template)
+    TemplateApplicationJobTarget.objects.bulk_create(
+        TemplateApplicationJobTarget(job=job, player=member)
+        for member in members
+    )
+    apply_playlist_template.delay(job.id)
+
+    messages.success(
+        request,
+        f'Applying to {len(members)} player{_pluralize(len(members))} '
+        f'in "{playlist_template.group.name}"…',
+    )
+    return redirect(
+        reverse('anthias_fleet:template_job_status', args=[job.id])
+    )
+
+
+def _template_job_context(job: TemplateApplicationJob) -> dict[str, Any]:
+    targets = list(job.targets.select_related('player').all())
+    all_done = not any(
+        t.status == TemplateApplicationJobTarget.STATUS_PENDING
+        for t in targets
+    )
+    return {
+        'job': job,
+        'targets': targets,
+        'all_done': all_done,
+        'active_nav': 'templates',
+    }
+
+
+@authorized
+@require_http_methods(['GET'])
+def template_job_status(request: HttpRequest, job_id: int) -> HttpResponse:
+    job = get_object_or_404(TemplateApplicationJob, pk=job_id)
+    return template(
+        request, 'fleet/template_job_status.html', _template_job_context(job)
+    )
+
+
+@authorized
+@require_http_methods(['GET'])
+def template_job_status_partial(
+    request: HttpRequest, job_id: int
+) -> HttpResponse:
+    job = get_object_or_404(TemplateApplicationJob, pk=job_id)
+    return render(
+        request,
+        'fleet/_template_job_status.html',
+        _template_job_context(job),
+    )

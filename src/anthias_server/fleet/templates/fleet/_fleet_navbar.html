@@ -49,6 +49,17 @@
             <span>Groups</span>
           </a>
         </li>
+
+        <li class="app-tab-item">
+          <a
+            href="{% url 'anthias_fleet:template_list' %}"
+            class="app-tab-link {% if active_nav == 'templates' %}active{% endif %}"
+            @click="open = false"
+          >
+            <i class="ti ti-playlist"></i>
+            <span>Templates</span>
+          </a>
+        </li>
       </ul>
     </div>
   </div>

@@ -1,0 +1,94 @@
+{% extends "_layout.html" %}
+
+{% block title %}Fleet · {% if item %}Edit item{% else %}Add item{% endif %}{% endblock %}
+
+{% block main %}
+<div class="app-container">
+  <div class="page-header-bar">
+    <div class="page-header-bar__title">
+      <h1 class="page-header">{% if item %}Edit "{{ item.name }}"{% else %}Add item to "{{ template_obj.name }}"{% endif %}</h1>
+    </div>
+  </div>
+
+  <form
+    method="post"
+    action="{% if item %}{% url 'anthias_fleet:template_item_edit' template_obj.id item.id %}{% else %}{% url 'anthias_fleet:template_item_new' template_obj.id %}{% endif %}"
+    class="settings-stack"
+  >
+    {% csrf_token %}
+    <section class="settings-section">
+      <div class="app-form-grid mb-4">
+        <div class="app-floating">
+          <input type="text" class="app-input" id="name" name="name" placeholder=" " required
+            value="{% if item %}{{ item.name }}{% else %}{{ form_values.name|default:'' }}{% endif %}">
+          <label for="name">Name</label>
+        </div>
+        <div class="app-floating">
+          <select class="app-select" id="mimetype" name="mimetype">
+            <option value="webpage" {% if item %}{% if item.mimetype == 'webpage' %}selected{% endif %}{% elif form_values.mimetype == 'webpage' or not form_values %}selected{% endif %}>Webpage</option>
+            <option value="image" {% if item.mimetype == 'image' or form_values.mimetype == 'image' %}selected{% endif %}>Image (remote URL)</option>
+            <option value="video" {% if item.mimetype == 'video' or form_values.mimetype == 'video' %}selected{% endif %}>Video (remote URL)</option>
+          </select>
+          <label for="mimetype">Type</label>
+        </div>
+      </div>
+
+      <div class="app-floating mb-4">
+        <input type="url" class="app-input" id="uri" name="uri" placeholder=" " required
+          value="{% if item %}{{ item.uri }}{% else %}{{ form_values.uri|default:'' }}{% endif %}">
+        <label for="uri">URL</label>
+      </div>
+
+      <div class="app-floating mb-4">
+        <input type="number" class="app-input" id="duration" name="duration" placeholder=" " min="0"
+          value="{% if item %}{{ item.duration }}{% else %}{{ form_values.duration|default:'10' }}{% endif %}">
+        <label for="duration">Duration (seconds)</label>
+      </div>
+
+      <div class="app-check app-switch mb-4">
+        <input type="hidden" name="is_enabled" value="false">
+        <input type="checkbox" class="app-check-input" id="is_enabled" name="is_enabled" value="true"
+          {% if item %}{% if item.is_enabled %}checked{% endif %}{% else %}checked{% endif %}>
+        <label class="app-check-label ml-2" for="is_enabled">Enabled</label>
+      </div>
+
+      <p class="settings-section__lede">
+        Restrict playback to specific weekdays and hours. Leave every day checked and the times empty to play all the time.
+      </p>
+      <div class="weekday-picker mb-3">
+        {% with selected_days=item.get_play_days %}
+        {% for d in "1234567" %}
+        <label class="weekday">
+          <input type="checkbox" name="play_days" value="{{ d }}"
+            {% if item %}{% if d|add:"0" in selected_days %}checked{% endif %}{% else %}checked{% endif %}>
+          {% if d == "1" %}<span>Mon</span>{% elif d == "2" %}<span>Tue</span>{% elif d == "3" %}<span>Wed</span>
+          {% elif d == "4" %}<span>Thu</span>{% elif d == "5" %}<span>Fri</span>{% elif d == "6" %}<span>Sat</span>
+          {% else %}<span>Sun</span>{% endif %}
+        </label>
+        {% endfor %}
+        {% endwith %}
+      </div>
+
+      <div class="app-form-grid">
+        <div class="app-floating">
+          <input type="time" class="app-input" id="play_time_from" name="play_time_from"
+            value="{% if item.play_time_from %}{{ item.play_time_from|time:'H:i' }}{% endif %}">
+          <label for="play_time_from">Play from</label>
+        </div>
+        <div class="app-floating">
+          <input type="time" class="app-input" id="play_time_to" name="play_time_to"
+            value="{% if item.play_time_to %}{{ item.play_time_to|time:'H:i' }}{% endif %}">
+          <label for="play_time_to">Play until</label>
+        </div>
+      </div>
+    </section>
+
+    <div class="flex justify-end gap-2">
+      <a href="{% url 'anthias_fleet:template_detail' template_obj.id %}" class="app-btn app-btn-link">Cancel</a>
+      <button type="submit" class="app-btn app-btn-primary">
+        <i class="ti ti-check"></i><span>{% if item %}Save changes{% else %}Add item{% endif %}</span>
+      </button>
+    </div>
+  </form>
+</div>
+{% endblock %}

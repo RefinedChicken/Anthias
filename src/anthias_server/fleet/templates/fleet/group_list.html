@@ -54,7 +54,10 @@
               </span>
               <form x-show="confirmingDelete" x-cloak method="post" action="{% url 'anthias_fleet:group_delete' group.id %}" class="inline flex items-center gap-2 m-0">
                 {% csrf_token %}
-                <span class="muted-label">Delete?</span>
+                <span class="muted-label">
+                  Delete?
+                  {% if group.template_count %}This also deletes {{ group.template_count }} template{{ group.template_count|pluralize }} (content already pushed to players is left in place).{% endif %}
+                </span>
                 <button type="submit" class="app-btn app-btn-danger" title="Confirm deletion">Yes</button>
                 <button type="button" class="app-btn app-btn-link" @click="confirmingDelete = false">Cancel</button>
               </form>

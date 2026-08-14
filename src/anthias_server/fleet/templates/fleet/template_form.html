@@ -1,0 +1,58 @@
+{% extends "_layout.html" %}
+
+{% block title %}Fleet · {% if template_obj %}Edit {{ template_obj.name }}{% else %}Add Template{% endif %}{% endblock %}
+
+{% block main %}
+<div class="app-container">
+  <div class="page-header-bar">
+    <div class="page-header-bar__title">
+      <h1 class="page-header">{% if template_obj %}Edit {{ template_obj.name }}{% else %}Add Template{% endif %}</h1>
+      <p class="page-header-bar__lede">
+        {% if template_obj %}
+        Applied to group "{{ template_obj.group.name }}". The group can't be changed after creation — delete and recreate under a different one instead.
+        {% else %}
+        Define a set of items once, then apply them across every player in a group.
+        {% endif %}
+      </p>
+    </div>
+  </div>
+
+  <form
+    method="post"
+    action="{% if template_obj %}{% url 'anthias_fleet:template_edit' template_obj.id %}{% else %}{% url 'anthias_fleet:template_new' %}{% endif %}"
+    class="settings-stack"
+  >
+    {% csrf_token %}
+    <section class="settings-section">
+      <div class="app-floating mb-4">
+        <input type="text" class="app-input" id="name" name="name" placeholder=" " required
+          value="{% if template_obj %}{{ template_obj.name }}{% else %}{{ form_values.name|default:'' }}{% endif %}">
+        <label for="name">Name</label>
+      </div>
+      <div class="app-floating mb-4">
+        <input type="text" class="app-input" id="description" name="description" placeholder=" "
+          value="{% if template_obj %}{{ template_obj.description }}{% else %}{{ form_values.description|default:'' }}{% endif %}">
+        <label for="description">Description (optional)</label>
+      </div>
+      {% if not template_obj %}
+      <div class="app-floating">
+        <select class="app-select" id="group" name="group" required>
+          <option value="">Choose a group…</option>
+          {% for group in groups %}
+          <option value="{{ group.id }}" {% if form_values.group == group.id|stringformat:"s" %}selected{% endif %}>{{ group.name }}</option>
+          {% endfor %}
+        </select>
+        <label for="group">Group</label>
+      </div>
+      {% endif %}
+    </section>
+
+    <div class="flex justify-end gap-2">
+      <a href="{% if template_obj %}{% url 'anthias_fleet:template_detail' template_obj.id %}{% else %}{% url 'anthias_fleet:template_list' %}{% endif %}" class="app-btn app-btn-link">Cancel</a>
+      <button type="submit" class="app-btn app-btn-primary">
+        <i class="ti ti-check"></i><span>{% if template_obj %}Save changes{% else %}Create template{% endif %}</span>
+      </button>
+    </div>
+  </form>
+</div>
+{% endblock %}

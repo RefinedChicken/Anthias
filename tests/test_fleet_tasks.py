@@ -15,12 +15,19 @@ from anthias_server.fleet.models import (
     AssetPushJobTarget,
     Player,
     PlayerGroup,
+    PlaylistTemplate,
+    PlaylistTemplateItem,
+    PlaylistTemplatePlacement,
+    TemplateApplicationJob,
+    TemplateApplicationJobTarget,
 )
 from anthias_server.fleet.player_client import (
     PlayerAPIError,
     PlayerUnreachableError,
 )
 from anthias_server.fleet.tasks import (
+    apply_playlist_template,
+    apply_playlist_template_to_player,
     heartbeat_sweep,
     poll_player_heartbeat,
     push_asset_to_group,
@@ -551,3 +558,277 @@ def test_push_asset_to_player_keeps_staged_file_while_others_pending(
         push_asset_to_player(target_a.id)
 
     assert staged.exists()
+
+
+# ---------------------------------------------------------------------------
+# Playlist template materialization
+
+
+def _make_template(**overrides: Any) -> PlaylistTemplate:
+    group = overrides.pop('group', None) or PlayerGroup.objects.create(
+        name='Lobby'
+    )
+    return PlaylistTemplate.objects.create(
+        name=overrides.pop('name', 'Menu'), group=group, **overrides
+    )
+
+
+def _make_item(
+    template: PlaylistTemplate, **overrides: Any
+) -> PlaylistTemplateItem:
+    return PlaylistTemplateItem.objects.create(
+        template=template,
+        name=overrides.pop('name', 'Board'),
+        uri=overrides.pop('uri', 'https://example.com/board'),
+        mimetype=overrides.pop('mimetype', 'webpage'),
+        **overrides,
+    )
+
+
+@pytest.mark.django_db
+def test_apply_playlist_template_fans_out_one_delay_per_target() -> None:
+    tmpl = _make_template()
+    job = TemplateApplicationJob.objects.create(template=tmpl)
+    target_a = TemplateApplicationJobTarget.objects.create(
+        job=job, player=_make_player(name='A')
+    )
+    target_b = TemplateApplicationJobTarget.objects.create(
+        job=job, player=_make_player(name='B')
+    )
+
+    with patch(
+        'anthias_server.fleet.tasks.apply_playlist_template_to_player.delay'
+    ) as mock_delay:
+        apply_playlist_template(job.id)
+
+    assert mock_delay.call_count == 2
+    called_ids = {call.args[0] for call in mock_delay.call_args_list}
+    assert called_ids == {target_a.id, target_b.id}
+
+
+@pytest.mark.django_db
+def test_apply_playlist_template_noops_for_deleted_job() -> None:
+    with patch(
+        'anthias_server.fleet.tasks.apply_playlist_template_to_player.delay'
+    ) as mock_delay:
+        apply_playlist_template(999999)
+
+    mock_delay.assert_not_called()
+
+
+@pytest.mark.django_db
+def test_apply_playlist_template_to_player_creates_new_placement() -> None:
+    tmpl = _make_template()
+    item = _make_item(tmpl, name='Board', uri='https://example.com/board')
+    job = TemplateApplicationJob.objects.create(template=tmpl)
+    player = _make_player(name='A')
+    target = TemplateApplicationJobTarget.objects.create(
+        job=job, player=player
+    )
+
+    with patch(
+        'anthias_server.fleet.tasks.PlayerAPIClient'
+    ) as mock_client_cls:
+        mock_client_cls.return_value.create_asset.return_value = {
+            'asset_id': 'remote-1'
+        }
+        mock_client_cls.return_value.list_assets.return_value = []
+        apply_playlist_template_to_player(target.id)
+
+    target.refresh_from_db()
+    assert target.status == TemplateApplicationJobTarget.STATUS_SUCCESS
+
+    placement = PlaylistTemplatePlacement.objects.get(item=item, player=player)
+    assert placement.remote_asset_id == 'remote-1'
+
+    sent = mock_client_cls.return_value.create_asset.call_args.args[0]
+    assert sent['name'] == 'Board'
+    assert sent['uri'] == 'https://example.com/board'
+    assert sent['mimetype'] == 'webpage'
+    assert sent['play_days'] == [1, 2, 3, 4, 5, 6, 7]
+
+    mock_client_cls.return_value.reorder_assets.assert_called_once_with(
+        ['remote-1']
+    )
+
+
+@pytest.mark.django_db
+def test_apply_playlist_template_to_player_updates_existing_placement() -> (
+    None
+):
+    tmpl = _make_template()
+    item = _make_item(tmpl)
+    job = TemplateApplicationJob.objects.create(template=tmpl)
+    player = _make_player(name='A')
+    target = TemplateApplicationJobTarget.objects.create(
+        job=job, player=player
+    )
+    PlaylistTemplatePlacement.objects.create(
+        template=tmpl, item=item, player=player, remote_asset_id='remote-1'
+    )
+
+    with patch(
+        'anthias_server.fleet.tasks.PlayerAPIClient'
+    ) as mock_client_cls:
+        mock_client_cls.return_value.list_assets.return_value = []
+        apply_playlist_template_to_player(target.id)
+
+    target.refresh_from_db()
+    assert target.status == TemplateApplicationJobTarget.STATUS_SUCCESS
+    mock_client_cls.return_value.update_asset.assert_called_once()
+    assert mock_client_cls.return_value.update_asset.call_args.args[0] == (
+        'remote-1'
+    )
+    mock_client_cls.return_value.create_asset.assert_not_called()
+
+
+@pytest.mark.django_db
+def test_apply_playlist_template_to_player_recreates_on_404() -> None:
+    tmpl = _make_template()
+    item = _make_item(tmpl)
+    job = TemplateApplicationJob.objects.create(template=tmpl)
+    player = _make_player(name='A')
+    target = TemplateApplicationJobTarget.objects.create(
+        job=job, player=player
+    )
+    PlaylistTemplatePlacement.objects.create(
+        template=tmpl,
+        item=item,
+        player=player,
+        remote_asset_id='stale-remote-id',
+    )
+
+    with patch(
+        'anthias_server.fleet.tasks.PlayerAPIClient'
+    ) as mock_client_cls:
+        mock_client_cls.return_value.update_asset.side_effect = PlayerAPIError(
+            404, 'Not Found'
+        )
+        mock_client_cls.return_value.create_asset.return_value = {
+            'asset_id': 'fresh-remote-id'
+        }
+        mock_client_cls.return_value.list_assets.return_value = []
+        apply_playlist_template_to_player(target.id)
+
+    target.refresh_from_db()
+    assert target.status == TemplateApplicationJobTarget.STATUS_SUCCESS
+    placement = PlaylistTemplatePlacement.objects.get(item=item, player=player)
+    assert placement.remote_asset_id == 'fresh-remote-id'
+
+
+@pytest.mark.django_db
+def test_apply_playlist_template_to_player_prunes_removed_items() -> None:
+    # Deleting a PlaylistTemplateItem SET_NULLs its placements'
+    # `item` rather than cascading them away — deliberately, so a
+    # placement whose item was removed since the last apply survives
+    # long enough for this prune step to find it, delete the *remote*
+    # copy, and only then drop the local tracking row. Losing the row
+    # to a CASCADE at delete-time would leak the remote asset forever.
+    tmpl = _make_template()
+    kept_item = _make_item(tmpl, name='Kept')
+    removed_item = _make_item(tmpl, name='Removed')
+    job = TemplateApplicationJob.objects.create(template=tmpl)
+    player = _make_player(name='A')
+    target = TemplateApplicationJobTarget.objects.create(
+        job=job, player=player
+    )
+    PlaylistTemplatePlacement.objects.create(
+        template=tmpl,
+        item=kept_item,
+        player=player,
+        remote_asset_id='kept-remote',
+    )
+    orphaned_placement = PlaylistTemplatePlacement.objects.create(
+        template=tmpl,
+        item=removed_item,
+        player=player,
+        remote_asset_id='removed-remote',
+    )
+    removed_item.delete()
+    orphaned_placement.refresh_from_db()
+    assert orphaned_placement.item_id is None
+
+    with patch(
+        'anthias_server.fleet.tasks.PlayerAPIClient'
+    ) as mock_client_cls:
+        mock_client_cls.return_value.update_asset.return_value = {}
+        mock_client_cls.return_value.list_assets.return_value = []
+        apply_playlist_template_to_player(target.id)
+
+    assert not PlaylistTemplatePlacement.objects.filter(
+        pk=orphaned_placement.pk
+    ).exists()
+    assert PlaylistTemplatePlacement.objects.filter(
+        item=kept_item, player=player
+    ).exists()
+    mock_client_cls.return_value.delete_asset.assert_called_once_with(
+        'removed-remote'
+    )
+
+
+@pytest.mark.django_db
+def test_apply_playlist_template_to_player_reorders_after_locally_managed_assets() -> (
+    None
+):
+    tmpl = _make_template()
+    _make_item(tmpl, name='A', order=0)
+    _make_item(tmpl, name='B', order=1)
+    job = TemplateApplicationJob.objects.create(template=tmpl)
+    player = _make_player(name='Target')
+    target = TemplateApplicationJobTarget.objects.create(
+        job=job, player=player
+    )
+
+    with patch(
+        'anthias_server.fleet.tasks.PlayerAPIClient'
+    ) as mock_client_cls:
+        mock_client_cls.return_value.create_asset.side_effect = [
+            {'asset_id': 'remote-a'},
+            {'asset_id': 'remote-b'},
+        ]
+        mock_client_cls.return_value.list_assets.return_value = [
+            {
+                'asset_id': 'local-1',
+                'is_enabled': True,
+                'is_processing': False,
+                'play_order': 0,
+            }
+        ]
+        apply_playlist_template_to_player(target.id)
+
+    mock_client_cls.return_value.reorder_assets.assert_called_once_with(
+        ['local-1', 'remote-a', 'remote-b']
+    )
+
+
+@pytest.mark.django_db
+def test_apply_playlist_template_to_player_marks_failed_on_api_error() -> None:
+    tmpl = _make_template()
+    _make_item(tmpl)
+    job = TemplateApplicationJob.objects.create(template=tmpl)
+    player = _make_player(name='A')
+    target = TemplateApplicationJobTarget.objects.create(
+        job=job, player=player
+    )
+
+    with patch(
+        'anthias_server.fleet.tasks.PlayerAPIClient'
+    ) as mock_client_cls:
+        mock_client_cls.return_value.create_asset.side_effect = PlayerAPIError(
+            503, 'Service Unavailable'
+        )
+        apply_playlist_template_to_player(target.id)
+
+    target.refresh_from_db()
+    assert target.status == TemplateApplicationJobTarget.STATUS_FAILED
+    assert '503' in target.error
+
+
+@pytest.mark.django_db
+def test_apply_playlist_template_to_player_noops_for_deleted_target() -> None:
+    with patch(
+        'anthias_server.fleet.tasks.PlayerAPIClient'
+    ) as mock_client_cls:
+        apply_playlist_template_to_player(999999)
+
+    mock_client_cls.assert_not_called()

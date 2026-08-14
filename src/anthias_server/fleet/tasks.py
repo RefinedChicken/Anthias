@@ -1,5 +1,5 @@
-"""Celery tasks for the fleet server: heartbeat polling and bulk asset
-push.
+"""Celery tasks for the fleet server: heartbeat polling, bulk asset
+push, and playlist-template materialization.
 
 Deliberately its own module rather than living in the shared
 ``celery_tasks.py`` (see that file's docstring/comments on Django
@@ -16,6 +16,7 @@ guard instead.
 
 from __future__ import annotations
 
+import json
 import logging
 from base64 import b64decode
 from contextlib import suppress
@@ -383,3 +384,183 @@ def push_asset_to_player(target_id: int) -> None:
     target.completed_at = timezone.now()
     target.save()
     _cleanup_staged_file_if_job_done(job)
+
+
+# --- playlist template materialization --------------------------------
+
+# Per-target budget: up to a handful of create/update/delete calls plus
+# one list_assets()/reorder_assets() pair, each bounded by the client's
+# own short (3, 5)s timeout — no file transfer involved (items are
+# URI-only in this first cut), so this stays close to the heartbeat
+# budgets rather than the transfer-heavy bulk-push ones above.
+TEMPLATE_APPLY_DISPATCH_SOFT_TIME_LIMIT_S = 60
+TEMPLATE_APPLY_DISPATCH_TIME_LIMIT_S = 90
+TEMPLATE_APPLY_TARGET_SOFT_TIME_LIMIT_S = 60
+TEMPLATE_APPLY_TARGET_TIME_LIMIT_S = 90
+
+# "Every day" default sent for a template item with no explicit
+# play_days — matches _normalise_play_days' accepted range (1=Monday..
+# 7=Sunday); an empty list is rejected by the player's own API.
+_ALL_PLAY_DAYS = list(range(1, 8))
+
+# Template items model day/time-window scheduling, not date-range
+# campaigns — start_date/end_date are pinned to a wide, fixed window
+# so they're effectively always "in range" rather than modelled
+# per-item.
+_TEMPLATE_ITEM_DATE_WINDOW_DAYS = 3650
+
+
+@celery.task(
+    soft_time_limit=TEMPLATE_APPLY_DISPATCH_SOFT_TIME_LIMIT_S,
+    time_limit=TEMPLATE_APPLY_DISPATCH_TIME_LIMIT_S,
+)
+def apply_playlist_template(job_id: int) -> None:
+    """Fan out one ``apply_playlist_template_to_player`` task per
+    current member of the template's group — same dispatcher/
+    per-target split as ``heartbeat_sweep``/``push_asset_to_group``.
+    """
+    from anthias_server.fleet.models import TemplateApplicationJob
+
+    try:
+        job = TemplateApplicationJob.objects.get(id=job_id)
+    except TemplateApplicationJob.DoesNotExist:
+        return
+
+    for target_id in job.targets.values_list('id', flat=True):
+        apply_playlist_template_to_player.delay(target_id)
+
+
+def _template_item_payload(item: Any, now: Any) -> dict[str, Any]:
+    play_days = json.loads(item.play_days) if item.play_days else None
+    data: dict[str, Any] = {
+        'name': item.name,
+        'uri': item.uri,
+        'mimetype': item.mimetype,
+        'duration': item.duration,
+        'is_enabled': item.is_enabled,
+        'play_days': play_days or _ALL_PLAY_DAYS,
+        'start_date': now.isoformat(),
+        'end_date': (
+            now + timedelta(days=_TEMPLATE_ITEM_DATE_WINDOW_DAYS)
+        ).isoformat(),
+    }
+    if item.play_time_from and item.play_time_to:
+        data['play_time_from'] = item.play_time_from.isoformat()
+        data['play_time_to'] = item.play_time_to.isoformat()
+    return data
+
+
+@celery.task(
+    soft_time_limit=TEMPLATE_APPLY_TARGET_SOFT_TIME_LIMIT_S,
+    time_limit=TEMPLATE_APPLY_TARGET_TIME_LIMIT_S,
+)
+def apply_playlist_template_to_player(target_id: int) -> None:
+    """Sync one player's placements against the template's current
+    item set (create/update/prune), then reorder so the template's
+    items are appended after everything else already on the player.
+
+    No-ops if the target row is gone — mirrors
+    ``poll_player_heartbeat``'s "row deleted mid-flight" posture.
+    """
+    from anthias_server.fleet.models import (
+        PlaylistTemplatePlacement,
+        TemplateApplicationJobTarget,
+    )
+
+    try:
+        target = TemplateApplicationJobTarget.objects.select_related(
+            'job__template', 'player'
+        ).get(id=target_id)
+    except TemplateApplicationJobTarget.DoesNotExist:
+        return
+
+    template = target.job.template
+    player = target.player
+    client = PlayerAPIClient(player)
+    now = timezone.now()
+
+    try:
+        items = list(template.items.all())
+        remote_ids_by_item: dict[int, str] = {}
+
+        for item in items:
+            data = _template_item_payload(item, now)
+            placement = PlaylistTemplatePlacement.objects.filter(
+                item=item, player=player
+            ).first()
+
+            if placement is None:
+                created = client.create_asset(data)
+                placement = PlaylistTemplatePlacement.objects.create(
+                    template=template,
+                    item=item,
+                    player=player,
+                    remote_asset_id=created['asset_id'],
+                )
+            else:
+                try:
+                    client.update_asset(placement.remote_asset_id, data)
+                except PlayerAPIError as exc:
+                    # The tracked asset was deleted on the player
+                    # out-of-band — recreate it and repoint tracking
+                    # rather than leaving this item permanently stuck.
+                    if exc.status_code != 404:
+                        raise
+                    created = client.create_asset(data)
+                    placement.remote_asset_id = created['asset_id']
+                placement.save()
+
+            remote_ids_by_item[item.id] = placement.remote_asset_id
+
+        # Prune placements for items no longer in the template — this
+        # also naturally catches item=None rows (the item was deleted
+        # outright, which SET_NULLs rather than cascades the placement
+        # away specifically so this step has something to find).
+        stale = PlaylistTemplatePlacement.objects.filter(
+            template=template, player=player
+        ).exclude(item_id__in=remote_ids_by_item)
+        for placement in stale:
+            with suppress(PlayerUnreachableError, PlayerAPIError):
+                client.delete_asset(placement.remote_asset_id)
+            placement.delete()
+
+        # Reorder: full active-id list (per save_active_assets_ordering
+        # only setting play_order for ids it's given — a bare subset
+        # would collide with locally-managed assets' existing order),
+        # template items appended last in template order.
+        raw_assets = client.list_assets()
+        template_asset_ids = set(remote_ids_by_item.values())
+        active = sorted(
+            (
+                a
+                for a in raw_assets
+                if a.get('is_enabled') and not a.get('is_processing')
+            ),
+            key=lambda a: a.get('play_order') or 0,
+        )
+        non_template_ids = [
+            a['asset_id']
+            for a in active
+            if a['asset_id'] not in template_asset_ids
+        ]
+        template_ordered_ids = [remote_ids_by_item[item.id] for item in items]
+        client.reorder_assets(non_template_ids + template_ordered_ids)
+    except SoftTimeLimitExceeded:
+        logger.warning(
+            'apply_playlist_template_to_player: applying template %s '
+            'to player %s exceeded %ss; leaving pending for a retry',
+            template.id,
+            player.id,
+            TEMPLATE_APPLY_TARGET_SOFT_TIME_LIMIT_S,
+        )
+        return
+    except (PlayerUnreachableError, PlayerAPIError) as exc:
+        target.status = TemplateApplicationJobTarget.STATUS_FAILED
+        target.error = _task_error_message(exc)
+        target.completed_at = timezone.now()
+        target.save()
+        return
+
+    target.status = TemplateApplicationJobTarget.STATUS_SUCCESS
+    target.completed_at = timezone.now()
+    target.save()

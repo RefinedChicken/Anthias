@@ -1,0 +1,54 @@
+{% load asset_filters %}
+<tr x-data="{ confirmingDelete: false }">
+  <td data-label="Name">
+    <div class="asset-cell-name">
+      <span class="asset-cell-name__icon">
+        {% if item.mimetype == 'image' %}<i class="ti ti-photo"></i>
+        {% elif item.mimetype == 'video' %}<i class="ti ti-video"></i>
+        {% else %}<i class="ti ti-world"></i>
+        {% endif %}
+      </span>
+      <span class="asset-cell-name__title">
+        <span class="asset-cell-name__primary" title="{{ item.uri }}">{{ item.name }}</span>
+      </span>
+    </div>
+  </td>
+  <td data-label="Duration">{{ item.duration|humanize_duration }}</td>
+  <td data-label="Enabled">
+    {% if item.is_enabled %}
+    <span class="inline-flex items-center gap-1" style="color:#2f9e44"><i class="ti ti-check"></i>Enabled</span>
+    {% else %}
+    <span class="inline-flex items-center gap-1" style="color:#868e96"><i class="ti ti-x"></i>Disabled</span>
+    {% endif %}
+  </td>
+  <td class="text-right" data-label="Actions">
+    <div class="action-group">
+      <form method="post" action="{% url 'anthias_fleet:template_item_move' template_obj.id item.id 'up' %}" class="inline m-0">
+        {% csrf_token %}
+        <button type="submit" class="app-btn app-btn-icon" title="Move up" {% if forloop_first %}disabled{% endif %}>
+          <i class="ti ti-arrow-up"></i>
+        </button>
+      </form>
+      <form method="post" action="{% url 'anthias_fleet:template_item_move' template_obj.id item.id 'down' %}" class="inline m-0">
+        {% csrf_token %}
+        <button type="submit" class="app-btn app-btn-icon" title="Move down" {% if forloop_last %}disabled{% endif %}>
+          <i class="ti ti-arrow-down"></i>
+        </button>
+      </form>
+      <a href="{% url 'anthias_fleet:template_item_edit' template_obj.id item.id %}" class="app-btn app-btn-icon" title="Edit">
+        <i class="ti ti-pencil"></i>
+      </a>
+      <span x-show="!confirmingDelete">
+        <button type="button" class="app-btn app-btn-icon" title="Delete" @click="confirmingDelete = true">
+          <i class="ti ti-trash"></i>
+        </button>
+      </span>
+      <form x-show="confirmingDelete" x-cloak method="post" action="{% url 'anthias_fleet:template_item_delete' template_obj.id item.id %}" class="inline flex items-center gap-2 m-0">
+        {% csrf_token %}
+        <span class="muted-label">Delete?</span>
+        <button type="submit" class="app-btn app-btn-danger" title="Confirm deletion">Yes</button>
+        <button type="button" class="app-btn app-btn-link" @click="confirmingDelete = false">Cancel</button>
+      </form>
+    </div>
+  </td>
+</tr>
