@@ -433,7 +433,16 @@
         <i class="ti ti-plug"></i><span>Generate pairing token</span>
       </button>
     </form>
+    {% endif %}
 
+    {% comment %}
+      Deliberately outside the is_fleet_managed branch above: creating a
+      pairing token makes is_fleet_managed() true immediately, so the
+      very next render of this page (the one showing the reveal modal)
+      already takes the "Paired" branch, not the "unpaired" one the
+      generate form lives in. The one-time reveal has to be reachable
+      from either state.
+    {% endcomment %}
     {% if new_fleet_pairing_token %}
     <div x-show="showNewPairingToken" x-cloak class="modal-overlay" @keydown.escape.window="showNewPairingToken = false" @click.self="showNewPairingToken = false">
       <div class="modal-card modal-card--sm">
@@ -455,7 +464,6 @@
         </div>
       </div>
     </div>
-    {% endif %}
     {% endif %}
   </section>
 

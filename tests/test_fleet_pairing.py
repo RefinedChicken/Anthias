@@ -104,6 +104,40 @@ def test_fleet_pairing_create_issues_fleet_scoped_token() -> None:
 
 
 @pytest.mark.django_db
+def test_new_pairing_token_renders_once_even_though_already_paired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: creating a pairing token makes is_fleet_managed()
+    true immediately, so the very next render of the settings page (the
+    one meant to show the one-time reveal) already takes the "Paired"
+    branch — the reveal must not be nested inside the "not yet paired"
+    branch, or it becomes unreachable. Caught by hand while verifying
+    against a live server; this is the regression test that should have
+    caught it here first."""
+    monkeypatch.setattr(
+        'anthias_server.app.page_context.device_helper.parse_cpu_info',
+        lambda: {'cpu_count': 0},
+    )
+
+    admin = _make_admin()
+    client = Client()
+    client.force_login(admin)
+    client.post(reverse('anthias_app:fleet_pairing_create'))
+    raw_token = client.session['new_fleet_pairing_token']
+
+    assert is_fleet_managed() is True
+
+    first = client.get(reverse('anthias_app:settings'))
+    assert first.status_code == 200
+    assert raw_token in first.content.decode()
+    assert 'new_fleet_pairing_token' not in client.session
+
+    second = client.get(reverse('anthias_app:settings'))
+    assert second.status_code == 200
+    assert raw_token not in second.content.decode()
+
+
+@pytest.mark.django_db
 def test_fleet_pairing_create_replaces_existing_pairing_token() -> None:
     admin = _make_admin()
     first, _ = issue_api_token(
