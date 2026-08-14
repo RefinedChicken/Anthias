@@ -819,8 +819,23 @@ class TestImportWizardPage:
         # rendering, so an unknown key 404s without touching a template
         # (and without the redis-backed base layout the full-page render
         # would pull in — that path is exercised in the dev stack).
+        # import_content lives under /settings/, which now requires
+        # require_setup_complete (an admin account must exist) AND
+        # require_settings_access (the caller must be logged in as
+        # staff-or-admin) — seed and log in as an admin so the request
+        # reaches the view's own 404 logic rather than being redirected
+        # by either gate first.
+        from django.contrib.auth.models import User
+
+        admin = User.objects.create_superuser(
+            username='yodeck-import-wizard-admin',
+            password='fixture-yodeck-wizard-pwd',  # NOSONAR
+        )
+        client = Client()
+        client.force_login(admin)
+
         url = reverse(
             'anthias_app:import_content', kwargs={'provider': 'nope'}
         )
-        response = Client().get(url)
+        response = client.get(url)
         assert response.status_code == 404

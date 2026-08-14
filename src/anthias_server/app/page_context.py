@@ -241,28 +241,23 @@ def device_settings() -> dict[str, Any]:
     """Form values + dropdown choices for /settings.
 
     Pulls from the live settings object (no API hop). Adds the
-    page-only state the React component used to track:
-    `has_saved_basic_auth` (whether to show the Current Password
-    field), `is_pi5` (whether to hide the 3.5mm jack option), and
-    the choice tuples for the auth_backend / date_format dropdowns.
-    """
-    from anthias_server.lib.auth import _persisted_operator, operator_username
+    page-only state the React component used to track: `is_pi5`
+    (whether to hide the 3.5mm jack option), and the choice tuples for
+    the date_format / timezone dropdowns.
 
+    No more auth-form chrome here (`username` / `has_saved_basic_auth`)
+    — the Settings page no longer has a single-operator Authentication
+    section to pre-fill; `anthias_server.app.views.settings_view` adds
+    the multi-user `users` / `api_tokens` context directly instead.
+    `auth_backend` is kept (some callers still find it informative,
+    and it's permanently 'auth_basic' once setup has run) but nothing
+    in settings.html reads it anymore.
+    """
     settings.load()
     # parse_cpu_info() returns Mapping[str, int | str] per its stub, so
     # cast to str before substring-checking against the Pi 5 model name —
     # mypy refuses `'X' in (int|str)` even though str-len-check works.
     device_model = str(device_helper.parse_cpu_info().get('model') or '')
-
-    # ``has_saved_basic_auth`` keys the "Current password" field on the
-    # settings page. It needs to be true any time the device has a
-    # persisted operator User row — whether or not auth is currently
-    # enabled — because re-enabling auth requires proving knowledge
-    # of the existing password (see the ``apply_auth_settings``
-    # privilege-escalation guard). Hiding the field when auth is
-    # disabled but a User exists would mask the field the operator is
-    # required to fill in to make the form succeed.
-    has_persisted_operator = _persisted_operator() is not None
 
     return {
         'player_name': settings['player_name'],
@@ -272,7 +267,6 @@ def device_settings() -> dict[str, Any]:
         'date_format': settings['date_format'],
         'timezone': settings['timezone'],
         'auth_backend': settings['auth_backend'],
-        'username': operator_username(),
         'show_splash': settings['show_splash'],
         'default_assets': settings['default_assets'],
         'shuffle_playlist': settings['shuffle_playlist'],
@@ -286,9 +280,6 @@ def device_settings() -> dict[str, Any]:
         # == 0 %} ladder picks 0° in that case, matching the
         # viewer's runtime clamp (Copilot review of #2882).
         'screen_rotation': clamp_screen_rotation(settings['screen_rotation']),
-        # Auth-form chrome
-        'has_saved_basic_auth': has_persisted_operator
-        or settings['auth_backend'] == 'auth_basic',
         # Hide the 3.5mm jack option on Pi 5 — the jack moved off-board
         # on that revision (matches the React audio-output dropdown).
         'is_pi5': 'Raspberry Pi 5' in device_model,

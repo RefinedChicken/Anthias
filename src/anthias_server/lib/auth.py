@@ -74,8 +74,29 @@ This module's surface is:
   the operator turned auth off (``settings['auth_backend'] == ''``)
   and otherwise redirects to the login page with the request's
   original path round-tripped through ``?next=``.
+* ``require_setup_complete`` — the mandatory first-run gate. Unlike
+  ``authorized`` it is NOT feature-flagged on ``auth_backend`` (there
+  is no "disabled" state once a device has an admin account) —
+  it redirects to ``/setup/`` whenever no ``User`` with
+  ``is_superuser=True`` exists yet. HTML-app-only: never applied to
+  the DRF API, whose "auth disabled = fully open" wire contract this
+  feature does not change.
+* ``require_settings_access`` — second gate for the Settings-family
+  HTML views: authenticated is not enough, ``request.user`` must also
+  be an admin (``is_superuser``) or have been granted Settings access
+  (``is_staff``, repurposed for this — see ``AnthiasApp`` docs).
 * ``apply_auth_settings`` / ``operator_username`` — settings-page
-  helpers shared by the HTML and DRF write paths.
+  helpers shared by the HTML and DRF write paths. Kept intact
+  (including the now-HTML-unreachable ``auth_backend`` switching
+  logic) because ``DeviceSettingsViewV2.patch`` (the v2 API) still
+  depends on the exact same contract — the API's wire shape must not
+  change here.
+* ``apply_self_account_changes`` — the HTML-only self-service
+  username/password change any logged-in user (not just "the"
+  canonical operator) can make for their own account, current-password
+  required. Distinct from ``apply_auth_settings`` (API, canonical
+  operator) and from an admin's no-current-password-needed reset of
+  *someone else's* password (``anthias_server.app.views.user_reset_password``).
 """
 
 from __future__ import annotations
@@ -513,6 +534,27 @@ def _login_redirect(request: HttpRequest) -> HttpResponse:
     )
 
 
+def _extract_request(args: tuple[Any, ...]) -> HttpRequest | DRFRequest | None:
+    """Scan positional call args for the request object.
+
+    Shared by ``authorized`` and ``require_settings_access``. URL
+    converters in Django and DRF are passed as kwargs by default, so
+    for a function-based view ``args`` is normally ``(request,)`` and
+    for a class-based view it's ``(self, request)``. But views called
+    directly (unit tests, nested decorators that re-shuffle args) can
+    pass extra positionals — scanning for the first HttpRequest / DRF
+    Request instance is robust to both shapes (see git history on
+    ``authorized`` for the ``args[-1]`` heuristic this replaced).
+    """
+    from django.http import HttpRequest as _HttpRequest
+    from rest_framework.request import Request as _Request
+
+    return next(
+        (a for a in args if isinstance(a, (_HttpRequest, _Request))),
+        None,
+    )
+
+
 def authorized[**P, R](
     orig: Callable[P, R],
 ) -> Callable[P, R | HttpResponse]:
@@ -535,7 +577,6 @@ def authorized[**P, R](
     at runtime the wrapped view still returns its concrete type.
     Callers that need the narrower type should cast at the call site.
     """
-    from django.http import HttpRequest
     from rest_framework.request import Request
 
     from anthias_server.settings import settings
@@ -545,19 +586,7 @@ def authorized[**P, R](
         if not settings['auth_backend']:
             return orig(*args, **kwargs)
 
-        # Locate the request by type rather than by position. URL
-        # converters in Django and DRF are passed as kwargs by
-        # default, so for a function-based view ``args`` is normally
-        # ``(request,)`` and for a class-based view it's
-        # ``(self, request)``. But views called directly (unit tests,
-        # nested decorators that re-shuffle args) can pass extra
-        # positionals — the previous ``args[-1]`` heuristic broke on
-        # those by treating e.g. ``asset_id`` as the request. Scan
-        # for the first HttpRequest / DRF Request instance instead.
-        request = next(
-            (a for a in args if isinstance(a, (HttpRequest, Request))),
-            None,
-        )
+        request = _extract_request(args)
         if request is None:
             raise ValueError('No request object passed to decorated function')
 
@@ -578,6 +607,110 @@ def authorized[**P, R](
         return _login_redirect(underlying)
 
     return decorated
+
+
+def require_setup_complete[**P, R](
+    orig: Callable[P, R],
+) -> Callable[P, R | HttpResponse]:
+    """Mandatory first-run gate: redirect to ``/setup/`` until an admin
+    account exists.
+
+    Unlike ``authorized``, this has no "disabled" state to bypass on —
+    login is permanently mandatory from the moment the first admin
+    account is created, so this decorator ignores
+    ``settings['auth_backend']`` entirely and looks only at whether a
+    persisted admin (``_persisted_operator()``) exists.
+
+    HTML-app-only. Deliberately NOT applied to the DRF API
+    (``api/views/*.py``) — that surface's "auth disabled = fully open"
+    contract is unchanged by this feature (see the module docstring).
+    Also not applied to ``anthias_app:setup`` itself (that would be an
+    infinite redirect), nor to ``login`` / ``splash_page`` — both
+    already existed as unguarded routes before this decorator, and
+    ``splash_page`` in particular is the boot-time on-screen IP
+    display a fresh device needs to keep rendering so an operator can
+    actually find the device to go run setup on it.
+
+    Stack this OUTSIDE ``@authorized`` (i.e. listed first / applied
+    last) on every other app view, so "no admin yet" is checked before
+    "not logged in".
+    """
+    from django.shortcuts import redirect
+    from django.urls import reverse
+
+    @wraps(orig)
+    def decorated(*args: P.args, **kwargs: P.kwargs) -> R | HttpResponse:
+        if _persisted_operator() is not None:
+            return orig(*args, **kwargs)
+        return redirect(reverse('anthias_app:setup'))
+
+    return decorated
+
+
+def require_settings_access[**P, R](
+    orig: Callable[P, R],
+) -> Callable[P, R | HttpResponse]:
+    """Second gate for the Settings-family HTML views: being logged in
+    (``authorized``) is not enough, ``request.user`` must also be
+    allowed into Settings — an admin (``is_superuser``) always is; a
+    regular user needs ``is_staff`` (repurposed here to mean "can
+    access Settings", toggleable per-user by an admin).
+
+    Stack this INSIDE ``@authorized`` (i.e. listed after it) since it
+    assumes ``request.user`` has already been resolved by Django's
+    ``AuthenticationMiddleware`` — it does its own
+    ``is_authenticated`` check up front so it degrades safely
+    (redirects, doesn't 500) if reached with an anonymous user, e.g.
+    if ``authorized`` no-ops because ``auth_backend`` happens to be
+    empty in a given environment.
+    """
+    from django.contrib import messages
+    from django.shortcuts import redirect
+    from django.urls import reverse
+    from rest_framework.request import Request
+
+    @wraps(orig)
+    def decorated(*args: P.args, **kwargs: P.kwargs) -> R | HttpResponse:
+        request = _extract_request(args)
+        if request is None:
+            raise ValueError('No request object passed to decorated function')
+
+        user = getattr(request, 'user', None)
+        if (
+            user is not None
+            and user.is_authenticated
+            and (user.is_staff or user.is_superuser)
+        ):
+            return orig(*args, **kwargs)
+
+        underlying = (
+            request._request if isinstance(request, Request) else request
+        )
+        messages.error(underlying, "You don't have access to Settings.")
+        return redirect(reverse('anthias_app:home'))
+
+    return decorated
+
+
+def _is_last_admin(user: User) -> bool:
+    """True if ``user`` is an active admin and no other active admin
+    exists.
+
+    Used to block demoting/deleting the sole remaining admin — with
+    auth permanently mandatory there is no "disabled" fallback state
+    to recover into, so losing the last admin would permanently lock
+    every operator out of Settings (and out of ever creating another
+    admin, since that itself requires Settings access).
+    """
+    if not (user.is_superuser and user.is_active):
+        return False
+    from django.contrib.auth.models import User as UserModel
+
+    return not (
+        UserModel.objects.filter(is_superuser=True, is_active=True)
+        .exclude(pk=user.pk)
+        .exists()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -644,6 +777,11 @@ def _persisted_operator() -> User | None:
 
     Mirrors the same selector ``operator_username()`` uses so both
     sites agree on which User row is "the operator."
+
+    Also doubles as the "does at least one admin exist yet" check
+    behind ``require_setup_complete`` — with auth permanently
+    mandatory, a non-None result here is what lets a request past the
+    mandatory first-run gate instead of being sent to ``/setup/``.
     """
     from django.contrib.auth.models import User as UserModel
 
@@ -697,21 +835,22 @@ def _validate_password_strength(
 
 
 def _check_username_available(
-    operator: User,
     new_username: str,
+    *,
+    exclude_pk: int | None = None,
 ) -> None:
-    """Reject a username change that would collide with another row
-    before the ``operator.save()`` call raises ``IntegrityError`` on
-    the unique constraint. Anthias is single-operator in practice,
-    but a Django admin createsuperuser leaves a second User behind,
-    and the raw IntegrityError leaks SQL in the messages flash."""
+    """Reject a username change/creation that would collide with
+    another row before ``.save()`` raises ``IntegrityError`` on the
+    unique constraint — the raw IntegrityError leaks SQL in the
+    messages flash. ``exclude_pk`` is the row being renamed (omit it,
+    or pass ``None``, when creating a brand new user — every existing
+    username is then a collision)."""
     from django.contrib.auth.models import User as UserModel
 
-    if (
-        UserModel.objects.filter(username=new_username)
-        .exclude(pk=operator.pk)
-        .exists()
-    ):
+    qs = UserModel.objects.filter(username=new_username)
+    if exclude_pk is not None:
+        qs = qs.exclude(pk=exclude_pk)
+    if qs.exists():
         raise AuthSettingsError(f'Username {new_username!r} is already taken.')
 
 
@@ -741,7 +880,7 @@ def _update_existing_operator(
         _require_current_password_correct(
             current_pass_correct, action='username'
         )
-        _check_username_available(operator, new_username)
+        _check_username_available(new_username, exclude_pk=operator.pk)
         operator.username = new_username
         changed_fields.append('username')
 
@@ -813,6 +952,18 @@ def apply_auth_settings(
     The caller is responsible for persisting ``auth_backend`` itself
     (we don't touch the conf file from here so a failed write of one
     setting can't half-apply auth).
+
+    API-only as of the mandatory-setup-wizard change: the HTML
+    Settings page no longer exposes an ``auth_backend`` control (login
+    is permanently mandatory once the first admin exists — see
+    ``anthias_server.app.views.setup``) and its self-service password
+    change now goes through ``apply_self_account_changes`` instead,
+    which operates on ``request.user`` rather than "the" canonical
+    operator. This function is kept fully intact — backend switching,
+    the re-auth challenge, initial-operator creation, all of it — only
+    because ``DeviceSettingsViewV2.patch`` (the v2 API) still calls it
+    with the exact same contract; changing this function's behavior
+    would be a breaking change to that stable, versioned API surface.
 
     Parameter naming note: the form field is labelled ``password`` /
     ``current_password`` / ``password_2`` in the HTML, but Sonar's
@@ -916,3 +1067,63 @@ def operator_username() -> str:
         or User.objects.order_by('id').first()
     )
     return operator.get_username() if operator else ''
+
+
+def apply_self_account_changes(
+    request: AnyRequest,
+    *,
+    current_pwd: str,
+    new_username: str,
+    new_pwd: str,
+    new_pwd_confirm: str,
+) -> None:
+    """Let a *logged-in* user change their own username/password.
+
+    HTML-only, self-service half of the old single-operator
+    ``apply_auth_settings`` flow — but scoped to ``request.user``
+    rather than "the" canonical operator, since Settings is no longer
+    single-user: any authenticated user reaching the Settings page
+    (admin, or staff granted access) can change their own credentials
+    here, current-password required either way. This is deliberately
+    a different function/path from an admin resetting *someone else's*
+    password (``anthias_server.app.views.user_reset_password``), which
+    has no current-password challenge by design — the admin doesn't
+    know the other user's password, that's the point of a reset.
+
+    Raises ``AuthSettingsError`` with an operator-friendly message
+    when the input is rejected; both username and password are
+    independently optional (only changes actually requested need the
+    current password), same contract as the old
+    ``_update_existing_operator``.
+    """
+    user = _operator_user(request)
+    if user is None:
+        raise AuthSettingsError(
+            'You must be signed in to change your account.'
+        )
+
+    changed_fields: list[str] = []
+    current_pass_correct: bool | None = None
+    if current_pwd:
+        current_pass_correct = user.check_password(current_pwd)
+
+    if new_username and new_username != user.get_username():
+        _require_current_password_correct(
+            current_pass_correct, action='username'
+        )
+        _check_username_available(new_username, exclude_pk=user.pk)
+        user.username = new_username
+        changed_fields.append('username')
+
+    if new_pwd:
+        _require_current_password_correct(
+            current_pass_correct, action='password'
+        )
+        if new_pwd != new_pwd_confirm:
+            raise AuthSettingsError(_ERR_PWD_MISMATCH)
+        _validate_password_strength(new_pwd, user)
+        user.set_password(new_pwd)
+        changed_fields.append('password')
+
+    if changed_fields:
+        user.save(update_fields=changed_fields)

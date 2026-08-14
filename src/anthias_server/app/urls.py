@@ -15,6 +15,7 @@ app_name = 'anthias_app'
 # directions.
 urlpatterns = [
     path('splash-page/', views.splash_page, name='splash_page'),
+    path('setup/', views.setup, name='setup'),
     path('login/', views.login, name='login'),
     path('', views.home, name='home'),
     path('system-info/', views.system_info, name='system_info'),
@@ -43,6 +44,22 @@ urlpatterns = [
         'settings/api-tokens/<int:token_id>/revoke/',
         views.api_tokens_revoke,
         name='api_tokens_revoke',
+    ),
+    path('settings/users/create/', views.user_create, name='user_create'),
+    path(
+        'settings/users/<int:user_id>/edit/',
+        views.user_edit,
+        name='user_edit',
+    ),
+    path(
+        'settings/users/<int:user_id>/reset-password/',
+        views.user_reset_password,
+        name='user_reset_password',
+    ),
+    path(
+        'settings/users/<int:user_id>/delete/',
+        views.user_delete,
+        name='user_delete',
     ),
     path(
         'settings/migrate-to-screenly/',

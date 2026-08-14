@@ -46,8 +46,10 @@ from anthias_server.django_project.settings import is_valid_time_zone
 from anthias_server.lib import backup_helper, diagnostics
 from anthias_server.lib.auth import (
     AuthSettingsError,
-    apply_auth_settings,
+    apply_self_account_changes,
     authorized,
+    require_settings_access,
+    require_setup_complete,
 )
 from anthias_server.settings import ViewerPublisher, settings
 
@@ -159,6 +161,7 @@ def _checkbox(post: HttpRequest, name: str) -> bool:
     return 'true' in post.POST.getlist(name)
 
 
+@require_setup_complete
 @authorized
 @require_http_methods(['GET'])
 def integrations(request: HttpRequest) -> HttpResponse:
@@ -167,7 +170,9 @@ def integrations(request: HttpRequest) -> HttpResponse:
     return template(request, 'integrations.html', context)
 
 
+@require_setup_complete
 @authorized
+@require_settings_access
 @require_http_methods(['GET'])
 def migrate_to_screenly(request: HttpRequest) -> HttpResponse:
     # Highlight the Settings tab — the migration wizard is reached
@@ -179,7 +184,9 @@ def migrate_to_screenly(request: HttpRequest) -> HttpResponse:
     )
 
 
+@require_setup_complete
 @authorized
+@require_settings_access
 @require_http_methods(['GET'])
 def import_content(request: HttpRequest, provider: str) -> HttpResponse:
     """Render the import wizard for a given provider.
@@ -203,6 +210,7 @@ def import_content(request: HttpRequest, provider: str) -> HttpResponse:
 # --- /home (Schedule Overview) ----------------------------------------------
 
 
+@require_setup_complete
 @authorized
 @require_http_methods(['GET'])
 def home(request: HttpRequest) -> HttpResponse:
@@ -211,6 +219,7 @@ def home(request: HttpRequest) -> HttpResponse:
     return template(request, 'home.html', context)
 
 
+@require_setup_complete
 @authorized
 @require_http_methods(['GET'])
 def assets_table_partial(request: HttpRequest) -> HttpResponse:
@@ -221,6 +230,7 @@ def assets_table_partial(request: HttpRequest) -> HttpResponse:
     return _render(request, '_asset_table.html', page_context.assets())
 
 
+@require_setup_complete
 @authorized
 @require_http_methods(['POST'])
 def assets_create(request: HttpRequest) -> HttpResponse:
@@ -382,6 +392,7 @@ def _host_allowed(host: str) -> bool:
     return False
 
 
+@require_setup_complete
 @authorized
 @require_http_methods(['POST'])
 def assets_create_app(request: HttpRequest) -> HttpResponse:
@@ -487,6 +498,7 @@ def assets_create_app(request: HttpRequest) -> HttpResponse:
     )
 
 
+@require_setup_complete
 @authorized
 @require_http_methods(['POST'])
 def assets_upload(request: HttpRequest) -> HttpResponse:
@@ -761,6 +773,7 @@ def assets_upload(request: HttpRequest) -> HttpResponse:
     )
 
 
+@require_setup_complete
 @authorized
 @require_http_methods(['POST'])
 def assets_update(request: HttpRequest, asset_id: str) -> HttpResponse:
@@ -947,6 +960,7 @@ def assets_update(request: HttpRequest, asset_id: str) -> HttpResponse:
     return _asset_table_response(request, toast=('success', 'Changes saved'))
 
 
+@require_setup_complete
 @authorized
 @require_http_methods(['POST'])
 def assets_toggle(request: HttpRequest, asset_id: str) -> HttpResponse:
@@ -965,6 +979,7 @@ def assets_toggle(request: HttpRequest, asset_id: str) -> HttpResponse:
     return _asset_table_response(request, toast=toast)
 
 
+@require_setup_complete
 @authorized
 @require_http_methods(['POST'])
 def assets_delete(request: HttpRequest, asset_id: str) -> HttpResponse:
@@ -977,6 +992,7 @@ def assets_delete(request: HttpRequest, asset_id: str) -> HttpResponse:
     return _asset_table_response(request, toast=('success', 'Asset deleted'))
 
 
+@require_setup_complete
 @authorized
 @require_http_methods(['POST'])
 def assets_order(request: HttpRequest) -> HttpResponse:
@@ -1006,6 +1022,7 @@ def _pluralize(count: int, suffix: str = 's') -> str:
     return '' if count == 1 else suffix
 
 
+@require_setup_complete
 @authorized
 @require_http_methods(['POST'])
 def assets_bulk_action(request: HttpRequest) -> HttpResponse:
@@ -1086,6 +1103,7 @@ def assets_bulk_action(request: HttpRequest) -> HttpResponse:
     )
 
 
+@require_setup_complete
 @authorized
 @require_http_methods(['POST'])
 def assets_bulk_update(request: HttpRequest) -> HttpResponse:
@@ -1382,6 +1400,7 @@ def _safe_local_asset_path(uri: str) -> str | None:
     return candidate
 
 
+@require_setup_complete
 @authorized
 @require_http_methods(['GET'])
 def assets_download(request: HttpRequest, asset_id: str) -> HttpResponseBase:
@@ -1420,6 +1439,7 @@ def assets_download(request: HttpRequest, asset_id: str) -> HttpResponseBase:
     )  # lgtm [py/path-injection]
 
 
+@require_setup_complete
 @authorized
 @require_http_methods(['GET'])
 def assets_preview(request: HttpRequest, asset_id: str) -> HttpResponseBase:
@@ -1451,6 +1471,7 @@ def assets_preview(request: HttpRequest, asset_id: str) -> HttpResponseBase:
     )  # lgtm [py/path-injection]
 
 
+@require_setup_complete
 @authorized
 @require_http_methods(['POST'])
 def assets_control(request: HttpRequest, command: str) -> HttpResponse:
@@ -1608,6 +1629,7 @@ def _maybe_offer_review_cta(response: HttpResponse) -> None:
     _merge_hx_trigger(response, 'review-cta', True)
 
 
+@require_setup_complete
 @authorized
 @require_http_methods(['POST'])
 def review_cta_dismiss(request: HttpRequest) -> HttpResponse:
@@ -1619,6 +1641,7 @@ def review_cta_dismiss(request: HttpRequest) -> HttpResponse:
     return HttpResponse(status=204)
 
 
+@require_setup_complete
 @authorized
 @require_http_methods(['POST'])
 def review_cta_snooze(request: HttpRequest) -> HttpResponse:
@@ -1635,11 +1658,16 @@ def review_cta_snooze(request: HttpRequest) -> HttpResponse:
     return HttpResponse(status=204)
 
 
+@require_setup_complete
 @authorized
+@require_settings_access
 @require_http_methods(['GET'])
 def settings_view(request: HttpRequest) -> HttpResponse:
+    from typing import cast
+
+    from django.contrib.auth.models import User as UserModel
+
     from anthias_server.api.models import AnthiasAPIToken
-    from anthias_server.lib.auth import _persisted_operator
     from anthias_server.lib.integrations.registry import list_provider_meta
 
     context = page_context.device_settings()
@@ -1648,31 +1676,52 @@ def settings_view(request: HttpRequest) -> HttpResponse:
     # no template edit.
     context['import_providers'] = list_provider_meta()
 
-    operator = _persisted_operator()
-    context['has_operator_account'] = operator is not None
-    context['api_tokens'] = (
-        AnthiasAPIToken.objects.filter(user=operator)
-        if operator is not None
-        else AnthiasAPIToken.objects.none()
-    )
+    # Every user manages their own tokens now that Settings is
+    # multi-user — @require_setup_complete + @require_settings_access
+    # guarantee request.user is a real, authenticated account by the
+    # time this view runs (mypy sees the stock User|AnonymousUser
+    # union on request.user and doesn't know that, hence the cast).
+    current_user = cast(UserModel, request.user)
+    context['api_tokens'] = AnthiasAPIToken.objects.filter(user=current_user)
     # Popped (not just read) so the raw value renders exactly once —
     # issue_api_token() never persists it, and a page refresh or a
     # second tab must not be able to see it again.
     context['new_api_token'] = request.session.pop('new_api_token', None)
+
+    context['users'] = UserModel.objects.all().order_by('username')
+    context['admin_count'] = UserModel.objects.filter(
+        is_superuser=True, is_active=True
+    ).count()
+    # Same one-time-reveal pattern as new_api_token, for a password an
+    # admin just reset on someone else's behalf.
+    context['reset_user_password'] = request.session.pop(
+        'reset_user_password', None
+    )
     return template(request, 'settings.html', context)
 
 
+@require_setup_complete
 @authorized
+@require_settings_access
 @require_http_methods(['POST'])
 def settings_save(request: HttpRequest) -> HttpResponse:
     """Mirror of api.views.v2.DeviceSettingsViewV2.patch.
 
     Touches the same settings primitives the API view does so the JSON
-    and HTML write paths stay aligned without re-routing through HTTP.
+    and HTML write paths stay aligned without re-routing through HTTP,
+    with one deliberate exception: ``auth_backend`` is no longer a
+    field this form writes at all. Login is permanently mandatory from
+    the moment the first admin account is created (see
+    ``anthias_server.app.views.setup``); ``@require_setup_complete``
+    guarantees this view is never reached before that, so there's
+    nothing left for an HTML control to toggle. The self-service
+    "change your own password" flow that used to live in this same
+    handler now goes through ``apply_self_account_changes``, scoped to
+    ``request.user`` rather than "the" canonical operator — see that
+    function's docstring for why ``apply_auth_settings`` itself
+    (still used by the v2 API) couldn't just be reused here as-is.
     """
     settings.load()
-    auth_backend = request.POST.get('auth_backend', '')
-    current_password = request.POST.get('current_password', '')
 
     # Reject a bad timezone up front (mirrors the v2 serializer's
     # validate_timezone). Blank defers to the resolved default (TZ env
@@ -1689,17 +1738,13 @@ def settings_save(request: HttpRequest) -> HttpResponse:
         return redirect(reverse('anthias_app:settings'))
 
     try:
-        prev_auth_backend = settings['auth_backend']
-        apply_auth_settings(
+        apply_self_account_changes(
             request,
-            new_auth_backend=auth_backend,
-            current_pwd=current_password,
+            current_pwd=request.POST.get('current_password', ''),
             new_username=request.POST.get('user', ''),
             new_pwd=request.POST.get('password', ''),
             new_pwd_confirm=request.POST.get('password_2', ''),
-            prev_auth_backend=prev_auth_backend,
         )
-        settings['auth_backend'] = auth_backend
 
         settings['player_name'] = request.POST.get('player_name', '')
         # Clamped for the same reason as the per-asset duration: these
@@ -1760,7 +1805,9 @@ def settings_save(request: HttpRequest) -> HttpResponse:
     return redirect(reverse('anthias_app:settings'))
 
 
+@require_setup_complete
 @authorized
+@require_settings_access
 @require_http_methods(['POST'])
 def settings_backup(request: HttpRequest) -> HttpResponseBase:
     """Stream the backup archive as it is being built.
@@ -1793,7 +1840,9 @@ def settings_backup(request: HttpRequest) -> HttpResponseBase:
     return response
 
 
+@require_setup_complete
 @authorized
+@require_settings_access
 @require_http_methods(['POST'])
 def settings_recover(request: HttpRequest) -> HttpResponse:
     publisher = ViewerPublisher.get_instance()
@@ -1836,7 +1885,9 @@ def settings_recover(request: HttpRequest) -> HttpResponse:
     return redirect(reverse('anthias_app:settings'))
 
 
+@require_setup_complete
 @authorized
+@require_settings_access
 @require_http_methods(['POST'])
 def settings_reboot(request: HttpRequest) -> HttpResponse:
     reboot_anthias.apply_async()
@@ -1844,7 +1895,9 @@ def settings_reboot(request: HttpRequest) -> HttpResponse:
     return redirect(reverse('anthias_app:settings'))
 
 
+@require_setup_complete
 @authorized
+@require_settings_access
 @require_http_methods(['POST'])
 def settings_shutdown(request: HttpRequest) -> HttpResponse:
     shutdown_anthias.apply_async()
@@ -1856,7 +1909,9 @@ def settings_shutdown(request: HttpRequest) -> HttpResponse:
     return redirect(reverse('anthias_app:settings'))
 
 
+@require_setup_complete
 @authorized
+@require_settings_access
 @require_http_methods(['POST'])
 def settings_display_power(request: HttpRequest, state: str) -> HttpResponse:
     if state not in ('on', 'off'):
@@ -1876,30 +1931,36 @@ def settings_display_power(request: HttpRequest, state: str) -> HttpResponse:
     return redirect(reverse('anthias_app:settings'))
 
 
+@require_setup_complete
 @authorized
+@require_settings_access
 @require_http_methods(['POST'])
 def api_tokens_create(request: HttpRequest) -> HttpResponse:
-    """Issue a new ``AnthiasAPIToken`` for the operator account.
+    """Issue a new ``AnthiasAPIToken`` for ``request.user``.
 
-    Tokens are scoped to a real ``User`` row (see ``AnthiasAPIToken.user``),
-    so an operator account must exist first — same precondition the
-    settings page's own auth section surfaces via
-    ``has_saved_basic_auth``.
+    Scoped to whichever user is logged in and submitted the form —
+    Settings is multi-user now, so each user manages their own tokens
+    rather than every token being scoped to a single canonical
+    operator. ``@require_setup_complete`` + ``@authorized`` guarantee
+    ``request.user`` is a real, persisted account by the time this
+    view runs.
     """
-    from anthias_server.lib.auth import _persisted_operator, issue_api_token
+    from typing import cast
+
+    from django.contrib.auth.models import User as UserModel
+
+    from anthias_server.lib.auth import issue_api_token
 
     name = (request.POST.get('name') or '').strip()
-    operator = _persisted_operator()
-    if operator is None:
-        messages.error(
-            request,
-            'Create an operator account under Authentication before '
-            'issuing API tokens.',
-        )
-    elif not name:
+    if not name:
         messages.error(request, 'Token name is required.')
     else:
-        _, raw_token = issue_api_token(operator, name)
+        # @require_setup_complete + @authorized guarantee request.user
+        # is a real, authenticated account here; the cast is only to
+        # narrow past the stock User|AnonymousUser union mypy sees on
+        # request.user.
+        current_user = cast(UserModel, request.user)
+        _, raw_token = issue_api_token(current_user, name)
         # One-time reveal: stashed in the session (not a Django
         # `messages` toast, which is meant for short transient text)
         # so a page refresh or a second tab never shows it again —
@@ -1910,15 +1971,20 @@ def api_tokens_create(request: HttpRequest) -> HttpResponse:
     return redirect(reverse('anthias_app:settings'))
 
 
+@require_setup_complete
 @authorized
+@require_settings_access
 @require_http_methods(['POST'])
 def api_tokens_revoke(request: HttpRequest, token_id: int) -> HttpResponse:
-    from anthias_server.api.models import AnthiasAPIToken
-    from anthias_server.lib.auth import _persisted_operator
+    from typing import cast
 
-    operator = _persisted_operator()
+    from django.contrib.auth.models import User as UserModel
+
+    from anthias_server.api.models import AnthiasAPIToken
+
+    current_user = cast(UserModel, request.user)
     deleted, _ = AnthiasAPIToken.objects.filter(
-        pk=token_id, user=operator
+        pk=token_id, user=current_user
     ).delete()
     (messages.success if deleted else messages.error)(
         request, 'API token revoked.' if deleted else 'Token not found.'
@@ -1926,6 +1992,220 @@ def api_tokens_revoke(request: HttpRequest, token_id: int) -> HttpResponse:
     return redirect(reverse('anthias_app:settings'))
 
 
+# --- User management (Settings > Users) -------------------------------------
+#
+# is_superuser=True is "Admin": always has Settings access, can't be
+# demoted or deleted while the sole remaining admin (_is_last_admin).
+# is_staff is repurposed as "can access Settings" for everyone else,
+# toggled per-user by an admin (see require_settings_access). Creating,
+# editing, resetting someone else's password, and deleting are all
+# admin-only actions — a non-admin user with Settings access can see
+# this section but not act on it (their own account changes go through
+# settings_save -> apply_self_account_changes instead).
+
+
+@require_setup_complete
+@authorized
+@require_settings_access
+@require_http_methods(['POST'])
+def user_create(request: HttpRequest) -> HttpResponse:
+    from django.contrib.auth.models import User as UserModel
+
+    from anthias_server.lib.auth import (
+        AuthSettingsError,
+        _check_username_available,
+        _validate_password_strength,
+    )
+
+    if not request.user.is_superuser:
+        messages.error(request, 'Only an admin can add users.')
+        return redirect(reverse('anthias_app:settings'))
+
+    username = (request.POST.get('username') or '').strip()
+    password = request.POST.get('password') or ''
+    # Only an admin reaches this view at all (checked above), so the
+    # "grant admin" checkbox being present is itself already gated on
+    # the creator being an admin — no separate check needed here.
+    grant_admin = _checkbox(request, 'is_superuser')
+
+    try:
+        if not username:
+            raise AuthSettingsError('Username is required.')
+        if not password:
+            raise AuthSettingsError('Temporary password is required.')
+        _check_username_available(username)
+        _validate_password_strength(password, UserModel(username=username))
+    except AuthSettingsError as exc:
+        messages.error(request, str(exc))
+        return redirect(reverse('anthias_app:settings'))
+
+    new_user = UserModel(
+        username=username,
+        # New users default to no Settings access unless granted admin
+        # outright — is_staff mirrors is_superuser at creation time;
+        # an admin can grant a non-admin Settings access afterwards
+        # via user_edit.
+        is_staff=grant_admin,
+        is_superuser=grant_admin,
+        is_active=True,
+    )
+    new_user.set_password(password)
+    new_user.save()
+    messages.success(request, f'User "{username}" created.')
+    return redirect(reverse('anthias_app:settings'))
+
+
+@require_setup_complete
+@authorized
+@require_settings_access
+@require_http_methods(['POST'])
+def user_edit(request: HttpRequest, user_id: int) -> HttpResponse:
+    """Toggle a user's Settings access, or promote/demote admin.
+
+    ``action`` selects which of the two independent changes this POST
+    makes — the Users table submits a small dedicated form per toggle
+    (mirrors the API-tokens table's per-row revoke form) rather than
+    one big edit form.
+    """
+    from django.contrib.auth.models import User as UserModel
+
+    from anthias_server.lib.auth import _is_last_admin
+
+    if not request.user.is_superuser:
+        messages.error(request, 'Only an admin can manage users.')
+        return redirect(reverse('anthias_app:settings'))
+
+    target = UserModel.objects.filter(pk=user_id).first()
+    if target is None:
+        messages.error(request, 'User not found.')
+        return redirect(reverse('anthias_app:settings'))
+
+    action = request.POST.get('action', '')
+    if action == 'set_staff':
+        if target.is_superuser:
+            # Admins always have Settings access regardless of
+            # is_staff — nothing to toggle. Row is disabled/hidden in
+            # the template for this case; this is the server-side
+            # backstop for a hand-crafted POST.
+            messages.error(request, 'Admins always have Settings access.')
+        else:
+            target.is_staff = _checkbox(request, 'is_staff')
+            target.save(update_fields=['is_staff'])
+            messages.success(
+                request,
+                f'Updated Settings access for "{target.username}".',
+            )
+    elif action == 'promote':
+        target.is_superuser = True
+        target.is_staff = True
+        target.save(update_fields=['is_superuser', 'is_staff'])
+        messages.success(request, f'"{target.username}" is now an admin.')
+    elif action == 'demote':
+        if _is_last_admin(target):
+            messages.error(request, "Can't remove the last admin.")
+        else:
+            target.is_superuser = False
+            target.save(update_fields=['is_superuser'])
+            messages.success(
+                request, f'"{target.username}" is no longer an admin.'
+            )
+    else:
+        messages.error(request, 'Unknown user action.')
+
+    return redirect(reverse('anthias_app:settings'))
+
+
+@require_setup_complete
+@authorized
+@require_settings_access
+@require_http_methods(['POST'])
+def user_reset_password(request: HttpRequest, user_id: int) -> HttpResponse:
+    """Admin-acting-on-someone-else password reset.
+
+    No current-password challenge — that's the whole point of a
+    reset, the admin doesn't (and shouldn't) know the target's
+    current password. A logged-in user changing their OWN password is
+    a different path entirely (settings_save ->
+    apply_self_account_changes), which does require it. A random
+    high-entropy temp password is generated here (rather than an
+    admin typing one blind) and shown exactly once via the same
+    session-stash + modal pattern as a freshly issued API token.
+    """
+    import secrets
+
+    from django.contrib.auth.models import User as UserModel
+
+    if not request.user.is_superuser:
+        messages.error(
+            request, "Only an admin can reset another user's password."
+        )
+        return redirect(reverse('anthias_app:settings'))
+
+    if user_id == request.user.pk:
+        # This path exists precisely because it skips the
+        # current-password check — letting an admin point it at their
+        # own row would turn it into a way to bypass that check on
+        # their own account. Self password changes always go through
+        # "Your account" (settings_save) instead.
+        messages.error(
+            request, 'Use "Your account" above to change your own password.'
+        )
+        return redirect(reverse('anthias_app:settings'))
+
+    target = UserModel.objects.filter(pk=user_id).first()
+    if target is None:
+        messages.error(request, 'User not found.')
+        return redirect(reverse('anthias_app:settings'))
+
+    new_password = secrets.token_urlsafe(12)
+    target.set_password(new_password)
+    target.save(update_fields=['password'])
+    request.session['reset_user_password'] = {
+        'username': target.username,
+        'raw': new_password,
+    }
+    messages.success(request, f'Password reset for "{target.username}".')
+    return redirect(reverse('anthias_app:settings'))
+
+
+@require_setup_complete
+@authorized
+@require_settings_access
+@require_http_methods(['POST'])
+def user_delete(request: HttpRequest, user_id: int) -> HttpResponse:
+    from django.contrib.auth.models import User as UserModel
+
+    from anthias_server.lib.auth import _is_last_admin
+
+    if not request.user.is_superuser:
+        messages.error(request, 'Only an admin can delete users.')
+        return redirect(reverse('anthias_app:settings'))
+
+    if user_id == request.user.pk:
+        # Blocked outright rather than only guarded by the last-admin
+        # check: deleting yourself mid-session (even when other admins
+        # exist) is much more likely to be an accidental click than an
+        # intentional handoff, and there's no "are you sure, someone
+        # else is still an admin" nuance worth the added complexity.
+        messages.error(request, "You can't delete your own account.")
+        return redirect(reverse('anthias_app:settings'))
+
+    target = UserModel.objects.filter(pk=user_id).first()
+    if target is None:
+        messages.error(request, 'User not found.')
+        return redirect(reverse('anthias_app:settings'))
+
+    if _is_last_admin(target):
+        messages.error(request, "Can't delete the last admin.")
+        return redirect(reverse('anthias_app:settings'))
+
+    username = target.username
+    target.delete()
+    messages.success(request, f'Deleted user "{username}".')
+    return redirect(reverse('anthias_app:settings'))
+
+
+@require_setup_complete
 @authorized
 @require_http_methods(['GET'])
 def system_info(request: HttpRequest) -> HttpResponse:
@@ -1945,6 +2225,58 @@ def system_info(request: HttpRequest) -> HttpResponse:
     return template(request, 'system_info.html', context)
 
 
+# Deliberately NOT behind @require_setup_complete: this IS the gate's
+# target — every other view redirects here when no admin exists yet,
+# so gating it too would be an infinite redirect.
+@require_http_methods(['GET', 'POST'])
+def setup(request: HttpRequest) -> HttpResponse:
+    """Mandatory first-run wizard: create the device's first admin
+    account.
+
+    Reachable unconditionally (see the module-level note above), but
+    once an admin already exists this just bounces onward to home —
+    so a stale bookmark, a second browser tab, or the back button
+    after finishing setup is harmless rather than re-showing (or
+    worse, re-submitting) the wizard.
+    """
+    from anthias_server.lib.auth import (
+        _create_initial_operator,
+        _persisted_operator,
+    )
+
+    if _persisted_operator() is not None:
+        return redirect(reverse('anthias_app:home'))
+
+    if request.method == 'POST':
+        username = (request.POST.get('username') or '').strip()
+        password = request.POST.get('password') or ''
+        password_confirm = request.POST.get('password_confirm') or ''
+        try:
+            _create_initial_operator(username, password, password_confirm)
+        except AuthSettingsError as exc:
+            messages.error(request, str(exc))
+            return template(request, 'setup.html', {'username': username})
+
+        # Pinned permanently — there is no UI anywhere, ever again,
+        # that sets this back to '' (no more "disabled" state).
+        settings.load()
+        settings['auth_backend'] = 'auth_basic'
+        settings.save()
+
+        user = authenticate(request, username=username, password=password)
+        if user is not None:
+            django_login(request, user)
+        return redirect(reverse('anthias_app:home'))
+
+    return template(request, 'setup.html', {})
+
+
+# Deliberately NOT behind @require_setup_complete: before the first
+# admin account exists, /login/ just can't succeed (authenticate()
+# always returns None — there's no User row to match), but leaving it
+# reachable rather than bouncing it to /setup/ is harmless and keeps
+# this route's "unguarded" status quo intact (it was never behind
+# @authorized either).
 @require_http_methods(['GET', 'POST'])
 def login(request: HttpRequest) -> HttpResponse:
     # Read `next` from the form on POST (login.html round-trips the

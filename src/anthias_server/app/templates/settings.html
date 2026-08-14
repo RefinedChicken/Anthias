@@ -17,7 +17,6 @@
   <form
     method="post"
     action="{% url 'anthias_app:settings_save' %}"
-    x-data="{ authBackend: '{{ auth_backend }}' }"
     class="settings-stack"
   >
     {% csrf_token %}
@@ -107,50 +106,6 @@
       </div>
     </section>
 
-    {# ===== Authentication ===== #}
-    <section class="settings-section">
-      <header>
-        <div>
-          <h2>Authentication</h2>
-          <p class="settings-section__lede">Restrict access to this management UI. Leave disabled on a trusted LAN.</p>
-        </div>
-      </header>
-
-      <div class="app-floating mb-3">
-        <select class="app-select" id="auth_backend" name="auth_backend" x-model="authBackend">
-          <option value="">Disabled</option>
-          <option value="auth_basic" {% if auth_backend == 'auth_basic' %}selected{% endif %}>Basic auth</option>
-        </select>
-        <label for="auth_backend">Method</label>
-      </div>
-
-      {% if has_saved_basic_auth %}
-      <div class="app-floating mb-3" x-show="authBackend === 'auth_basic' || '{{ auth_backend }}' === 'auth_basic'">
-        <input type="password" class="app-input" id="current_password" name="current_password" placeholder=" " autocomplete="current-password">
-        <label for="current_password">Current password</label>
-      </div>
-      {% endif %}
-
-      <template x-if="authBackend === 'auth_basic'">
-        <div>
-          <div class="app-floating mb-3">
-            <input type="text" class="app-input" id="user" name="user" value="{{ username }}" placeholder=" " autocomplete="username">
-            <label for="user">Username</label>
-          </div>
-          <div class="app-form-grid">
-            <div class="app-floating">
-              <input type="password" class="app-input" id="password" name="password" placeholder=" " autocomplete="new-password">
-              <label for="password">New password</label>
-            </div>
-            <div class="app-floating">
-              <input type="password" class="app-input" id="password_2" name="password_2" placeholder=" " autocomplete="new-password">
-              <label for="password_2">Confirm new password</label>
-            </div>
-          </div>
-        </div>
-      </template>
-    </section>
-
     <div class="flex justify-end">
       <button type="submit" class="app-btn app-btn-primary">
         <i class="ti ti-check"></i><span>Save settings</span>
@@ -175,6 +130,171 @@
     </header>
   </section>
 
+  {# ===== Users ===== #}
+  <section class="settings-section mt-4" x-data="{ showResetPassword: {{ reset_user_password|yesno:'true,false' }} }">
+    <header>
+      <div>
+        <h2>Users</h2>
+        <p class="settings-section__lede">Manage who can sign in. Admins always have Settings access; other users can be granted it individually.</p>
+      </div>
+    </header>
+
+    {# ----- Your account: self-service, any logged-in user ----- #}
+    <div class="settings-section__row">
+      <div style="width: 100%">
+        <strong>Your account</strong>
+        <p class="settings-section__lede">Change your own username or password. Your current password is required for either.</p>
+        <form method="post" action="{% url 'anthias_app:settings_save' %}" class="app-form-grid mt-2">
+          {% csrf_token %}
+          <div class="app-floating">
+            <input type="text" class="app-input" id="account_user" name="user" value="{{ request.user.get_username }}" placeholder=" " autocomplete="username">
+            <label for="account_user">Username</label>
+          </div>
+          <div class="app-floating">
+            <input type="password" class="app-input" id="account_current_password" name="current_password" placeholder=" " autocomplete="current-password">
+            <label for="account_current_password">Current password</label>
+          </div>
+          <div class="app-floating">
+            <input type="password" class="app-input" id="account_password" name="password" placeholder=" " autocomplete="new-password">
+            <label for="account_password">New password</label>
+          </div>
+          <div class="app-floating">
+            <input type="password" class="app-input" id="account_password_2" name="password_2" placeholder=" " autocomplete="new-password">
+            <label for="account_password_2">Confirm new password</label>
+          </div>
+          <button type="submit" class="app-btn app-btn-outline-dark">
+            <i class="ti ti-check"></i><span>Update your account</span>
+          </button>
+        </form>
+      </div>
+    </div>
+
+    {% if request.user.is_superuser %}
+    {# ----- Add user: admin-only ----- #}
+    <div class="settings-section__row mt-3">
+      <div style="width: 100%">
+        <strong>Add user</strong>
+        <form method="post" action="{% url 'anthias_app:user_create' %}" class="app-form-grid mt-2">
+          {% csrf_token %}
+          <div class="app-floating">
+            <input type="text" class="app-input" id="new_user_username" name="username" placeholder=" " autocomplete="off" required>
+            <label for="new_user_username">Username</label>
+          </div>
+          <div class="app-floating">
+            <input type="password" class="app-input" id="new_user_password" name="password" placeholder=" " autocomplete="new-password" required>
+            <label for="new_user_password">Temporary password</label>
+          </div>
+          <label class="flex items-center gap-2">
+            <input type="checkbox" name="is_superuser" value="true">
+            <span>Grant admin</span>
+          </label>
+          <button type="submit" class="app-btn app-btn-outline-dark">
+            <i class="ti ti-user-plus"></i><span>Add user</span>
+          </button>
+        </form>
+      </div>
+    </div>
+
+    {# ----- All users: admin-only ----- #}
+    <table class="asset-table mt-3">
+      <thead>
+        <tr>
+          <th scope="col">Username</th>
+          <th scope="col">Admin</th>
+          <th scope="col">Settings access</th>
+          <th scope="col"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr x-data="{ confirmingDelete: false }">
+          <td>{{ u.username }}{% if u.pk == request.user.pk %} <span class="muted-label">(you)</span>{% endif %}</td>
+          <td>
+            {% if u.is_superuser %}
+            <span class="settings-section__badge">Admin</span>
+            {% if admin_count > 1 %}
+            <form method="post" action="{% url 'anthias_app:user_edit' u.pk %}" class="inline m-0">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="demote">
+              <button type="submit" class="app-btn app-btn-link">Remove admin</button>
+            </form>
+            {% endif %}
+            {% else %}
+            <form method="post" action="{% url 'anthias_app:user_edit' u.pk %}" class="inline m-0">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="promote">
+              <button type="submit" class="app-btn app-btn-link">Make admin</button>
+            </form>
+            {% endif %}
+          </td>
+          <td>
+            {% if u.is_superuser %}
+            <span class="muted-label">Always</span>
+            {% else %}
+            <form method="post" action="{% url 'anthias_app:user_edit' u.pk %}" class="inline m-0">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="set_staff">
+              <input type="hidden" name="is_staff" value="false">
+              <label class="flex items-center gap-2">
+                <input type="checkbox" name="is_staff" value="true" {% if u.is_staff %}checked{% endif %} onchange="this.form.requestSubmit()">
+                <span>Can access Settings</span>
+              </label>
+            </form>
+            {% endif %}
+          </td>
+          <td>
+            <div class="flex items-center gap-2">
+              {% if u.pk != request.user.pk %}
+              <form method="post" action="{% url 'anthias_app:user_reset_password' u.pk %}" class="inline m-0">
+                {% csrf_token %}
+                <button type="submit" class="app-btn app-btn-link">Reset password</button>
+              </form>
+              {% endif %}
+              {% if u.pk != request.user.pk %}
+              {% if not u.is_superuser or admin_count > 1 %}
+              <div x-show="!confirmingDelete">
+                <button type="button" class="app-btn app-btn-link" @click="confirmingDelete = true">Delete</button>
+              </div>
+              <form x-show="confirmingDelete" x-cloak method="post" action="{% url 'anthias_app:user_delete' u.pk %}" class="flex items-center gap-2 m-0">
+                {% csrf_token %}
+                <span class="muted-label">Delete?</span>
+                <button type="submit" class="app-btn app-btn-danger">Yes</button>
+                <button type="button" class="app-btn app-btn-link" @click="confirmingDelete = false">Cancel</button>
+              </form>
+              {% endif %}
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    {% if reset_user_password %}
+    <div x-show="showResetPassword" x-cloak class="modal-overlay" @keydown.escape.window="showResetPassword = false" @click.self="showResetPassword = false">
+      <div class="modal-card modal-card--sm">
+        <div class="modal-card__header">
+          <h2>Copy the new password now</h2>
+          <button type="button" class="modal-card__close" @click="showResetPassword = false" aria-label="Close">
+            <i class="ti ti-x"></i>
+          </button>
+        </div>
+        <div class="modal-card__body">
+          <p>This is the only time the new password for "{{ reset_user_password.username }}" will be shown. Share it with them now — it can't be recovered later, only reset again.</p>
+          <div class="app-floating">
+            <input type="text" class="app-input" id="reset_user_password_value" value="{{ reset_user_password.raw }}" readonly @focus="$el.select()">
+            <label for="reset_user_password_value">Password</label>
+          </div>
+        </div>
+        <div class="modal-card__footer">
+          <button type="button" class="app-btn app-btn-primary" @click="showResetPassword = false">Done</button>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </section>
+
   {# ===== API tokens ===== #}
   <section class="settings-section mt-4" x-data="{ showNewToken: {{ new_api_token|yesno:'true,false' }} }">
     <header>
@@ -184,9 +304,6 @@
       </div>
     </header>
 
-    {% if not has_operator_account %}
-    <p class="settings-section__lede">Create an operator account under Authentication above before issuing API tokens.</p>
-    {% else %}
     <form method="post" action="{% url 'anthias_app:api_tokens_create' %}" class="app-form-grid mb-3">
       {% csrf_token %}
       <div class="app-floating">
@@ -233,7 +350,6 @@
     </table>
     {% else %}
     <p class="settings-section__lede">No API tokens yet.</p>
-    {% endif %}
     {% endif %}
 
     {% if new_api_token %}
