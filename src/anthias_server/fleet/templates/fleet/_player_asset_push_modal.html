@@ -1,0 +1,52 @@
+{% comment %} Push-to-group modal. Opened by the "Push to group" button
+   on each _player_asset_row.html row, which sets the parent
+   x-data's pushTarget to {id, name}. Same modal-overlay/modal-card
+   shell as _players_bulk_action_bar.html's reboot/shutdown confirm.
+   The push itself is async (see views.player_asset_push /
+   fleet.tasks.push_asset_to_group) — submitting redirects straight
+   to the polled job-status page rather than swapping this page's
+   asset table. {% endcomment %}
+<div
+  x-show="pushTarget"
+  x-cloak
+  class="modal-overlay"
+  @keydown.escape.window="pushTarget = null"
+  @click.self="pushTarget = null"
+>
+  <div class="modal-card modal-card--sm">
+    <div class="modal-card__header">
+      <h2>Push <span x-text="pushTarget && pushTarget.name"></span> to a group</h2>
+      <button type="button" class="modal-card__close" @click="pushTarget = null" aria-label="Close">
+        <i class="ti ti-x"></i>
+      </button>
+    </div>
+    <form method="post" :action="`/players/{{ player.id }}/assets/${pushTarget ? pushTarget.id : ''}/push/`">
+      {% csrf_token %}
+      <div class="modal-card__body">
+        {% if groups %}
+        <div class="app-floating">
+          <select id="push-group-select" name="group_id" class="app-select">
+            {% for group in groups %}
+            <option value="{{ group.id }}" {% if group.id == player.group_id %}selected{% endif %}>{{ group.name }}</option>
+            {% endfor %}
+          </select>
+          <label for="push-group-select">Group</label>
+        </div>
+        <p class="muted-label mt-2">
+          Pushes to every other player currently in the chosen group. This player itself is skipped.
+        </p>
+        {% else %}
+        <p class="m-0">No groups exist yet — create one first to push assets across players.</p>
+        {% endif %}
+      </div>
+      <div class="modal-card__footer">
+        <button type="button" class="app-btn app-btn-link" @click="pushTarget = null">Cancel</button>
+        {% if groups %}
+        <button type="submit" class="app-btn app-btn-primary">
+          <i class="ti ti-send"></i><span>Push</span>
+        </button>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+</div>

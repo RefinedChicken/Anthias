@@ -1,0 +1,21 @@
+{% extends "_layout.html" %}
+
+{% block title %}Fleet · Push status{% endblock %}
+
+{% block main %}
+<div class="app-container">
+  <div class="page-header-bar">
+    <div class="page-header-bar__title">
+      <h1 class="page-header">Asset push</h1>
+      <p class="page-header-bar__lede">
+        From <a href="{% url 'anthias_fleet:player_detail' job.source_player_id %}">{{ job.source_player.name|default:"a removed player" }}</a>
+        to every other player in "{{ job.group.name }}".
+      </p>
+    </div>
+  </div>
+
+  {% comment %}Flash messages are emitted as toasts by _toasts.html (vendor.ts drainDjangoMessages()).{% endcomment %}
+
+  {% include "fleet/_push_job_status.html" %}
+</div>
+{% endblock %}

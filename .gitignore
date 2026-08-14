@@ -64,6 +64,10 @@ db.sqlite3
 .anthias-test.db-wal
 .anthias-test.db-shm
 
+# Local pytest asset-push staging dir (settings.py FLEET_PUSH_STAGING_DIR
+# in test mode).
+.fleet-push-staging-test/
+
 # Local agent state (Claude Code). Ignore everything under .claude by default —
 # git worktrees, unfiltered local memory, caches — but keep the curated,
 # PII-scrubbed knowledge base that ships with the repo (so it tracks without a

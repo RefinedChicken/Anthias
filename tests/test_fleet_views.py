@@ -23,7 +23,12 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client
 from django.urls import reverse
 
-from anthias_server.fleet.models import Player, PlayerGroup
+from anthias_server.fleet.models import (
+    AssetPushJob,
+    AssetPushJobTarget,
+    Player,
+    PlayerGroup,
+)
 from anthias_server.fleet.player_client import (
     PlayerAPIError,
     PlayerUnreachableError,
@@ -921,3 +926,176 @@ def test_group_edit_get_renders_form_and_post_updates(client: Client) -> None:
     group.refresh_from_db()
     assert group.name == 'Warehouse'
     assert group.description == 'Back of house'
+
+
+# ---------------------------------------------------------------------------
+# Bulk asset push
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_player_asset_push_creates_job_and_targets_and_enqueues(
+    client: Client,
+) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    source = _make_player(name='Source', group=group)
+    target_a = _make_player(name='A', group=group)
+    target_b = _make_player(name='B', group=group)
+    # Different group — must never receive this push.
+    other_group = PlayerGroup.objects.create(name='Warehouse')
+    _make_player(name='C', group=other_group)
+
+    with mock.patch(
+        'anthias_server.fleet.views.push_asset_to_group.delay'
+    ) as mock_delay:
+        response = client.post(
+            reverse(
+                'anthias_fleet:player_asset_push',
+                args=[source.id, 'asset-1'],
+            ),
+            {'group_id': str(group.id)},
+        )
+
+    assert response.status_code == 302
+    job = AssetPushJob.objects.get()
+    assert job.group_id == group.id
+    assert job.source_player_id == source.id
+    assert job.source_asset_id == 'asset-1'
+    mock_delay.assert_called_once_with(job.id)
+
+    target_player_ids = set(job.targets.values_list('player_id', flat=True))
+    assert target_player_ids == {target_a.id, target_b.id}
+    assert response.url == reverse(
+        'anthias_fleet:push_job_status', args=[job.id]
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_player_asset_push_defaults_to_source_players_own_group(
+    client: Client,
+) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    source = _make_player(name='Source', group=group)
+    _make_player(name='A', group=group)
+
+    with mock.patch('anthias_server.fleet.views.push_asset_to_group.delay'):
+        response = client.post(
+            reverse(
+                'anthias_fleet:player_asset_push',
+                args=[source.id, 'asset-1'],
+            ),
+        )
+
+    assert response.status_code == 302
+    job = AssetPushJob.objects.get()
+    assert job.group_id == group.id
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_player_asset_push_errors_with_no_group_chosen(
+    client: Client,
+) -> None:
+    source = _make_player(name='Source')  # no group
+
+    with mock.patch(
+        'anthias_server.fleet.views.push_asset_to_group.delay'
+    ) as mock_delay:
+        response = client.post(
+            reverse(
+                'anthias_fleet:player_asset_push',
+                args=[source.id, 'asset-1'],
+            ),
+        )
+
+    assert response.status_code == 302
+    assert not AssetPushJob.objects.exists()
+    mock_delay.assert_not_called()
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_player_asset_push_noop_when_group_has_no_other_members(
+    client: Client,
+) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    source = _make_player(name='Source', group=group)
+
+    with mock.patch(
+        'anthias_server.fleet.views.push_asset_to_group.delay'
+    ) as mock_delay:
+        response = client.post(
+            reverse(
+                'anthias_fleet:player_asset_push',
+                args=[source.id, 'asset-1'],
+            ),
+            {'group_id': str(group.id)},
+        )
+
+    assert response.status_code == 302
+    assert not AssetPushJob.objects.exists()
+    mock_delay.assert_not_called()
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_push_job_status_renders(client: Client) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    source = _make_player(name='Source', group=group)
+    target = _make_player(name='A', group=group)
+    job = AssetPushJob.objects.create(
+        group=group, source_player=source, source_asset_id='asset-1'
+    )
+    AssetPushJobTarget.objects.create(job=job, player=target)
+
+    response = client.get(
+        reverse('anthias_fleet:push_job_status', args=[job.id])
+    )
+    assert response.status_code == 200
+    body = response.content.decode()
+    assert 'Lobby' in body
+    assert 'A' in body
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_push_job_status_partial_stops_polling_when_all_done(
+    client: Client,
+) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    source = _make_player(name='Source', group=group)
+    target = _make_player(name='A', group=group)
+    job = AssetPushJob.objects.create(
+        group=group, source_player=source, source_asset_id='asset-1'
+    )
+    AssetPushJobTarget.objects.create(
+        job=job, player=target, status=AssetPushJobTarget.STATUS_SUCCESS
+    )
+
+    response = client.get(
+        reverse('anthias_fleet:push_job_status_partial', args=[job.id])
+    )
+    assert response.status_code == 200
+    body = response.content.decode()
+    assert 'hx-trigger' not in body
+
+
+@pytest.mark.django_db
+@pytest.mark.urls(_FLEET_URLCONF)
+def test_push_job_status_partial_keeps_polling_while_pending(
+    client: Client,
+) -> None:
+    group = PlayerGroup.objects.create(name='Lobby')
+    source = _make_player(name='Source', group=group)
+    target = _make_player(name='A', group=group)
+    job = AssetPushJob.objects.create(
+        group=group, source_player=source, source_asset_id='asset-1'
+    )
+    AssetPushJobTarget.objects.create(job=job, player=target)
+
+    response = client.get(
+        reverse('anthias_fleet:push_job_status_partial', args=[job.id])
+    )
+    assert response.status_code == 200
+    assert 'hx-trigger="every 3s"' in response.content.decode()

@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 import requests
+from django.conf import settings as django_settings
 
 from anthias_common.http import AnthiasSession
 
@@ -24,6 +25,13 @@ if TYPE_CHECKING:
 # Short, fixed timeouts so one unreachable player can never hang a
 # heartbeat sweep or a UI drill-down waiting on it — (connect, read).
 _TIMEOUT_S = (3, 5)
+
+# Wider read timeout for calls that move a whole asset's bytes in one
+# response/request body (file_asset upload, assets/<id>/content
+# download) — the player fully buffers/encodes the payload before
+# responding, so a multi-MB file can legitimately take longer than the
+# short timeout above without anything being wrong.
+_TRANSFER_TIMEOUT_S = (3, 120)
 
 
 class PlayerAPIError(Exception):
@@ -39,13 +47,42 @@ class PlayerUnreachableError(Exception):
     """The player could not be reached at all (network/timeout/DNS)."""
 
 
+class AssetTooLargeError(PlayerAPIError):
+    """A ``Content-Length`` on an asset-content response already
+    exceeded ``settings.FLEET_PUSH_MAX_ASSET_SIZE_BYTES`` — caught
+    before the (fully-buffered, base64-encoded) body is even parsed.
+    Subclasses ``PlayerAPIError`` so callers that already catch
+    ``(PlayerUnreachableError, PlayerAPIError)`` for a bulk-push
+    failure path handle this without an extra except clause.
+    """
+
+    def __init__(self, size_bytes: int, max_bytes: int) -> None:
+        # status_code=0 is synthetic — this isn't an HTTP error status,
+        # it's a client-side guard tripped before the request compl-
+        # etes downloading.
+        super().__init__(
+            0,
+            f'Asset content ({size_bytes} bytes) exceeds the fleet '
+            f'push size cap of {max_bytes} bytes.',
+        )
+        self.size_bytes = size_bytes
+        self.max_bytes = max_bytes
+
+
 class PlayerAPIClient:
     def __init__(self, player: Player) -> None:
         self._base_url = player.base_url.rstrip('/')
         self._api_token = player.get_api_token()
         self._verify_ssl = not player.skip_ssl_verify
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        timeout: tuple[int, int] = _TIMEOUT_S,
+        max_content_length: int | None = None,
+        **kwargs: Any,
+    ) -> Any:
         session = AnthiasSession()
         session.headers['Authorization'] = f'Bearer {self._api_token}'
         url = f'{self._base_url}/api/v2/{path.lstrip("/")}'
@@ -53,7 +90,7 @@ class PlayerAPIClient:
             response = session.request(
                 method,
                 url,
-                timeout=_TIMEOUT_S,
+                timeout=timeout,
                 verify=self._verify_ssl,
                 **kwargs,
             )
@@ -62,6 +99,17 @@ class PlayerAPIClient:
 
         if not response.ok:
             raise PlayerAPIError(response.status_code, response.text)
+
+        if max_content_length is not None:
+            content_length = response.headers.get('Content-Length')
+            if (
+                content_length is not None
+                and int(content_length) > max_content_length
+            ):
+                raise AssetTooLargeError(
+                    int(content_length), max_content_length
+                )
+
         if response.status_code == 204 or not response.content:
             return None
         return response.json()
@@ -114,6 +162,7 @@ class PlayerAPIClient:
             self._request(
                 'POST',
                 'file_asset',
+                timeout=_TRANSFER_TIMEOUT_S,
                 files={'file_upload': (filename, content, content_type)},
             ),
         )
@@ -121,6 +170,28 @@ class PlayerAPIClient:
     def get_asset(self, asset_id: str) -> dict[str, Any]:
         return cast(
             'dict[str, Any]', self._request('GET', f'assets/{asset_id}')
+        )
+
+    def get_asset_content(self, asset_id: str) -> dict[str, Any]:
+        """Mirrors ``AssetContentViewMixin``'s response shape: either
+        ``{'type': 'file', 'filename', 'content' (base64), 'mimetype'}``
+        or ``{'type': 'url', 'url'}``. Guarded by
+        ``settings.FLEET_PUSH_MAX_ASSET_SIZE_BYTES`` via
+        ``max_content_length`` — the player fully buffers and base64-
+        encodes the file before responding, so it's worth rejecting an
+        oversized asset from its ``Content-Length`` rather than
+        downloading the whole thing first.
+        """
+        return cast(
+            'dict[str, Any]',
+            self._request(
+                'GET',
+                f'assets/{asset_id}/content',
+                timeout=_TRANSFER_TIMEOUT_S,
+                max_content_length=(
+                    django_settings.FLEET_PUSH_MAX_ASSET_SIZE_BYTES
+                ),
+            ),
         )
 
     def update_asset(

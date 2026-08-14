@@ -21,6 +21,10 @@ class PlayerAdmin(admin.ModelAdmin[Player]):
         'mac_address',
         'device_model',
         'anthias_version',
+        'loadavg_15min',
+        'free_space',
+        'display_power',
+        'up_to_date',
     )
     readonly_fields = (
         'mac_address',
@@ -29,6 +33,13 @@ class PlayerAdmin(admin.ModelAdmin[Player]):
         'is_reachable',
         'last_reachability_check',
         'last_error',
+        'loadavg_15min',
+        'free_space',
+        'display_power',
+        'up_to_date',
+        'uptime_days',
+        'uptime_hours',
+        'memory',
         'created_at',
         'updated_at',
     )

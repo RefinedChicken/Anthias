@@ -1,0 +1,62 @@
+{% load humanize %}
+{% comment %} Push-job status partial. Polls itself every 3s via htmx
+   until every target has left "pending" — the wrapping element's
+   hx-get/hx-trigger pair is only present while all_done is false, so
+   the polling loop terminates instead of running forever against a
+   finished job (mirrors _player_table.html's self-replacing
+   hx-swap="outerHTML" contract, but conditionally so it can stop). {% endcomment %}
+<div
+  id="push-job-status"
+  {% if not all_done %}
+  hx-get="{% url 'anthias_fleet:push_job_status_partial' job.id %}"
+  hx-trigger="every 3s"
+  hx-swap="outerHTML"
+  {% endif %}
+  class="surface"
+>
+  <header class="surface__header">
+    <div class="surface__header-left">
+      <h2><i class="ti ti-send mr-2"></i>Pushing to "{{ job.group.name }}"</h2>
+    </div>
+    <span class="surface__count">
+      {% if all_done %}Done{% else %}In progress…{% endif %}
+    </span>
+  </header>
+
+  <table class="asset-table">
+    <thead>
+      <tr>
+        <th scope="col">Player</th>
+        <th scope="col">Status</th>
+        <th scope="col">Detail</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for target in targets %}
+      <tr>
+        <td data-label="Player">
+          <a href="{% url 'anthias_fleet:player_detail' target.player_id %}">{{ target.player.name }}</a>
+        </td>
+        <td data-label="Status">
+          {% if target.status == 'pending' %}
+          <span class="inline-flex items-center gap-1" style="color:#868e96"><i class="ti ti-clock"></i>Pending</span>
+          {% elif target.status == 'success' %}
+          <span class="inline-flex items-center gap-1" style="color:#2f9e44"><i class="ti ti-check"></i>Success</span>
+          {% elif target.status == 'skipped' %}
+          <span class="inline-flex items-center gap-1" style="color:#f08c00"><i class="ti ti-player-skip-forward"></i>Skipped</span>
+          {% else %}
+          <span class="inline-flex items-center gap-1" style="color:#e03131"><i class="ti ti-x"></i>Failed</span>
+          {% endif %}
+        </td>
+        <td data-label="Detail">
+          {% if target.error %}
+          <span class="muted-label" title="{{ target.error }}">{{ target.error|truncatechars:60 }}</span>
+          {% elif target.completed_at %}
+          <span class="muted-label">{{ target.completed_at|naturaltime }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

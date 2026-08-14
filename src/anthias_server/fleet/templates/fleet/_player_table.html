@@ -77,6 +77,16 @@
           {% if player.last_error %}
           <div class="muted-label" title="{{ player.last_error }}">{{ player.last_error|truncatechars:40 }}</div>
           {% endif %}
+          {% for flag in player.health_flags %}
+          <i
+            class="ti ti-alert-triangle"
+            title="{{ flag.label }}"
+            {% if flag.level == 'critical' %}style="color:#e03131"
+            {% elif flag.level == 'warning' %}style="color:#f08c00"
+            {% else %}style="color:#868e96"
+            {% endif %}
+          ></i>
+          {% endfor %}
         </td>
         <td data-label="Last seen">
           {% if player.last_reachability_check %}{{ player.last_reachability_check|naturaltime }}{% else %}Never{% endif %}

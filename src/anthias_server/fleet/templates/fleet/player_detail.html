@@ -26,6 +26,7 @@
     selected: [],
     showAddForm: false,
     bulkDeleteOpen: false,
+    pushTarget: null,
     isSelected(id) { return this.selected.includes(id) },
     toggle(id) {
       this.selected = this.isSelected(id)
@@ -57,6 +58,14 @@
         {% else %}
         · <span style="color:#e03131">Offline</span>
         {% endif %}
+        {% for flag in player.health_flags %}
+        · <span
+          class="inline-flex items-center gap-1"
+          {% if flag.level == 'critical' %}style="color:#e03131"
+          {% elif flag.level == 'warning' %}style="color:#f08c00"
+          {% endif %}
+        ><i class="ti ti-alert-triangle" style="font-size:.85em"></i>{{ flag.label }}</span>
+        {% endfor %}
       </p>
     </div>
     <div class="page-header-bar__actions">
@@ -88,6 +97,10 @@
     {% include "_stat_card.html" with label="Device model" value=player.device_model|default:"Unknown" %}
     {% include "_stat_card.html" with label="Anthias version" value=player.anthias_version|default:"Unknown" %}
     {% include "_stat_card.html" with label="MAC address" value=player.mac_address|default:"Unknown" %}
+    {% include "_stat_card.html" with label="Load average (15m)" value=player.loadavg_15min|default:"Unknown" %}
+    {% include "_stat_card.html" with label="Uptime" value=player.uptime_days|default_if_none:"—" meta="days" %}
+    {% include "_stat_card.html" with label="Free space" value=player.free_space|default:"Unknown" meta="Approximate — from the player's own disk check" %}
+    {% include "_stat_card.html" with label="Memory used" value=player.memory.used|default_if_none:"Unknown" meta="of {{ player.memory.total|default_if_none:'Unknown' }} MB" %}
   </div>
 
   {% if fetch_error %}
@@ -100,6 +113,8 @@
   {% comment %}Flash messages are emitted as toasts by _toasts.html (vendor.ts drainDjangoMessages()).{% endcomment %}
 
   {% include "fleet/_player_asset_modal.html" %}
+
+  {% include "fleet/_player_asset_push_modal.html" %}
 
   {% include "fleet/_player_asset_table.html" %}
 

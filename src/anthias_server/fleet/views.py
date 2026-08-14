@@ -37,12 +37,18 @@ from anthias_server.app.views import (
 )
 from anthias_server.fleet.adapters import asset_from_player_dict
 from anthias_server.fleet.helpers import template
-from anthias_server.fleet.models import Player, PlayerGroup
+from anthias_server.fleet.models import (
+    AssetPushJob,
+    AssetPushJobTarget,
+    Player,
+    PlayerGroup,
+)
 from anthias_server.fleet.player_client import (
     PlayerAPIClient,
     PlayerAPIError,
     PlayerUnreachableError,
 )
+from anthias_server.fleet.tasks import push_asset_to_group
 from anthias_server.lib.auth import authorized
 
 if TYPE_CHECKING:
@@ -318,6 +324,7 @@ def _player_detail_context(player: Player) -> dict[str, Any]:
     ]
     return {
         'player': player,
+        'groups': PlayerGroup.objects.all(),
         'active_assets': active,
         'inactive_assets': inactive,
         'fetch_error': fetch_error,
@@ -809,6 +816,88 @@ def player_asset_move(
         )
     return _player_asset_table_response(
         request, player, toast=('success', 'Order updated')
+    )
+
+
+@authorized
+@require_http_methods(['POST'])
+def player_asset_push(
+    request: HttpRequest, player_id: int, asset_id: str
+) -> HttpResponse:
+    """Push one of this player's assets to every other player in a
+    group. Async — a multi-MB file could take well past a request's
+    lifetime to fan out to N targets, so this only creates the job/
+    target rows and enqueues ``push_asset_to_group``, then redirects
+    to the polled status page rather than blocking on the transfer.
+    No group-scoped permissions exist (per the confirmed Phase 2
+    scope), so any staff/superuser may push to any group, defaulting
+    to the source player's own."""
+    player = get_object_or_404(Player, pk=player_id)
+
+    group_id = request.POST.get('group_id') or (
+        player.group_id and str(player.group_id)
+    )
+    group = get_object_or_404(PlayerGroup, pk=group_id) if group_id else None
+    if group is None:
+        return _player_asset_table_response(
+            request, player, toast=('error', 'Choose a group to push to.')
+        )
+
+    targets = list(group.players.exclude(pk=player.pk))
+    if not targets:
+        return _player_asset_table_response(
+            request,
+            player,
+            toast=(
+                'info',
+                f'"{group.name}" has no other players to push to.',
+            ),
+        )
+
+    job = AssetPushJob.objects.create(
+        group=group, source_player=player, source_asset_id=asset_id
+    )
+    AssetPushJobTarget.objects.bulk_create(
+        AssetPushJobTarget(job=job, player=target) for target in targets
+    )
+    push_asset_to_group.delay(job.id)
+
+    messages.success(
+        request,
+        f'Pushing to {len(targets)} player{_pluralize(len(targets))} '
+        f'in "{group.name}"…',
+    )
+    return redirect(reverse('anthias_fleet:push_job_status', args=[job.id]))
+
+
+def _push_job_context(job: AssetPushJob) -> dict[str, Any]:
+    targets = list(job.targets.select_related('player').all())
+    all_done = not any(
+        t.status == AssetPushJobTarget.STATUS_PENDING for t in targets
+    )
+    return {
+        'job': job,
+        'targets': targets,
+        'all_done': all_done,
+        'active_nav': 'players',
+    }
+
+
+@authorized
+@require_http_methods(['GET'])
+def push_job_status(request: HttpRequest, job_id: int) -> HttpResponse:
+    job = get_object_or_404(AssetPushJob, pk=job_id)
+    return template(
+        request, 'fleet/push_job_status.html', _push_job_context(job)
+    )
+
+
+@authorized
+@require_http_methods(['GET'])
+def push_job_status_partial(request: HttpRequest, job_id: int) -> HttpResponse:
+    job = get_object_or_404(AssetPushJob, pk=job_id)
+    return render(
+        request, 'fleet/_push_job_status.html', _push_job_context(job)
     )
 
 

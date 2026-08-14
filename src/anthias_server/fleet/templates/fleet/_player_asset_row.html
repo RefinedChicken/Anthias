@@ -87,6 +87,10 @@
         </button>
       </form>
       {% endif %}
+      <button type="button" class="app-btn app-btn-icon" title="Push to group"
+        @click="pushTarget = { id: '{{ asset.asset_id }}', name: '{{ asset.name|default:'this asset'|escapejs }}' }">
+        <i class="ti ti-send"></i>
+      </button>
       <span x-show="!confirmingDelete">
         <button type="button" class="app-btn app-btn-icon" title="Delete" @click="confirmingDelete = true">
           <i class="ti ti-trash"></i>

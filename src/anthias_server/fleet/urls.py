@@ -82,6 +82,21 @@ urlpatterns = [
         views.player_asset_move,
         name='player_asset_move',
     ),
+    path(
+        'players/<int:player_id>/assets/<str:asset_id>/push/',
+        views.player_asset_push,
+        name='player_asset_push',
+    ),
+    path(
+        'push-jobs/<int:job_id>/',
+        views.push_job_status,
+        name='push_job_status',
+    ),
+    path(
+        'push-jobs/<int:job_id>/_partials/status/',
+        views.push_job_status_partial,
+        name='push_job_status_partial',
+    ),
     path('groups/', views.group_list, name='group_list'),
     path('groups/new/', views.group_new, name='group_new'),
     path('groups/<int:group_id>/edit/', views.group_edit, name='group_edit'),

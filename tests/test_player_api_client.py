@@ -12,6 +12,7 @@ import requests
 from anthias_common.http import AnthiasSession
 from anthias_server.fleet.models import Player
 from anthias_server.fleet.player_client import (
+    AssetTooLargeError,
     PlayerAPIClient,
     PlayerAPIError,
     PlayerUnreachableError,
@@ -35,6 +36,7 @@ def _response(
     json_data: Any = None,
     content: bytes = b'{}',
     text: str = '',
+    headers: dict[str, str] | None = None,
 ) -> MagicMock:
     resp = MagicMock()
     resp.status_code = status_code
@@ -42,6 +44,7 @@ def _response(
     resp.content = content
     resp.text = text
     resp.json.return_value = json_data
+    resp.headers = headers or {}
     return resp
 
 
@@ -246,3 +249,59 @@ def test_set_display_power_posts_to_state_path() -> None:
     method, url = mock_request.call_args.args[:2]
     assert method == 'POST'
     assert url.endswith('/api/v2/display/on')
+
+
+def test_get_asset_content_returns_parsed_json_under_the_size_cap() -> None:
+    client = PlayerAPIClient(_make_player())
+    payload = {'type': 'url', 'url': 'https://example.com/sign.png'}
+
+    with patch.object(
+        AnthiasSession,
+        'request',
+        return_value=_response(
+            json_data=payload, headers={'Content-Length': '10'}
+        ),
+    ) as mock_request:
+        assert client.get_asset_content('abc123') == payload
+
+    method, url = mock_request.call_args.args[:2]
+    assert method == 'GET'
+    assert url.endswith('/api/v2/assets/abc123/content')
+
+
+def test_get_asset_content_raises_when_content_length_exceeds_cap(
+    settings: Any,
+) -> None:
+    settings.FLEET_PUSH_MAX_ASSET_SIZE_BYTES = 100
+    client = PlayerAPIClient(_make_player())
+    resp = _response(
+        json_data={'type': 'file'}, headers={'Content-Length': '101'}
+    )
+
+    with (
+        patch.object(AnthiasSession, 'request', return_value=resp),
+        pytest.raises(AssetTooLargeError) as exc_info,
+    ):
+        client.get_asset_content('abc123')
+
+    assert exc_info.value.size_bytes == 101
+    assert exc_info.value.max_bytes == 100
+    # The oversized body must never be parsed.
+    resp.json.assert_not_called()
+
+
+def test_get_asset_content_allows_response_with_no_content_length_header() -> (
+    None
+):
+    # Some responses may omit Content-Length entirely — the size guard
+    # only fires when the header is actually present.
+    client = PlayerAPIClient(_make_player())
+
+    with patch.object(
+        AnthiasSession,
+        'request',
+        return_value=_response(json_data={'type': 'url', 'url': 'x'}),
+    ):
+        result = client.get_asset_content('abc123')
+
+    assert result == {'type': 'url', 'url': 'x'}

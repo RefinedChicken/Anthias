@@ -875,3 +875,23 @@ STORAGES = {
     },
 }
 DBBACKUP_HOSTNAME = 'anthias'
+
+# Fleet bulk asset push (fleet-management server only — Phase 2). The
+# player's v2/assets/<id>/content endpoint fully buffers + base64-
+# encodes a file before responding, so this is the cap on what the
+# fleet server will attempt to download from a source player in one
+# push. A starting point sized against _TRANSFER_TIMEOUT_S's 120s read
+# timeout at conservative LAN throughput, not a value assumed correct
+# for every fleet — override via env if real asset sizes warrant it.
+FLEET_PUSH_MAX_ASSET_SIZE_BYTES = int(
+    getenv('FLEET_PUSH_MAX_ASSET_SIZE_BYTES', str(200 * 1024 * 1024))
+)
+
+# Where a bulk-push job stages a downloaded asset's bytes on disk
+# before fanning uploads out to each target player. Repo-local in test
+# mode for the same reason db_path branches above do — the suite must
+# not require a writable /data on a bare host.
+if getenv('ENVIRONMENT') == 'test' or _running_under_pytest:
+    FLEET_PUSH_STAGING_DIR = str(BASE_DIR / '.fleet-push-staging-test')
+else:
+    FLEET_PUSH_STAGING_DIR = '/data/fleet_push_staging'
