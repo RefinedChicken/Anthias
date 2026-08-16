@@ -361,3 +361,26 @@ def _mock_redis(monkeypatch: pytest.MonkeyPatch) -> Iterator[MagicMock]:
 
     ViewerPublisher.INSTANCE = None
     ReplyCollector.INSTANCE = None
+
+
+@pytest.fixture(autouse=True)
+def _clear_throttle_cache() -> Iterator[None]:
+    """Reset Django's default cache before every test.
+
+    DRF's ``ScopedRateThrottle`` (added for the new Player/Fleet-Server
+    v2 endpoints) counts requests in Django's cache framework, which
+    defaults to an in-process ``LocMemCache`` that otherwise persists
+    for the life of the pytest worker — an anonymous client's throttle
+    bucket is keyed by IP, and the Django test client always uses the
+    same dummy IP, so without this, throttle counters would silently
+    accumulate across every test in a session instead of resetting per
+    test. No-op if the app stack isn't importable (mirrors
+    ``_mock_redis``'s ``_APP_AVAILABLE`` guard).
+    """
+    if not _APP_AVAILABLE:
+        yield
+        return
+    from django.core.cache import cache
+
+    cache.clear()
+    yield

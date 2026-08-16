@@ -2,12 +2,15 @@ import json
 from typing import Any
 
 from dateutil import parser as date_parser
+from django.db.models import QuerySet
 from rest_framework import status
+from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import exception_handler
 
 from anthias_common.remote_video import dispatch_remote_video_download
 from anthias_common.youtube import dispatch_download
+from anthias_server.api.pagination import DefaultV2Pagination
 from anthias_server.app.models import Asset
 from anthias_server.processing import dispatch_pending_normalize
 from anthias_server.settings import ViewerPublisher
@@ -16,6 +19,23 @@ from anthias_server.settings import ViewerPublisher
 class AssetCreationError(Exception):
     def __init__(self, errors: Any) -> None:
         self.errors = errors
+
+
+def paginate_queryset_response(
+    request: Request, queryset: QuerySet[Any], serializer_class: Any
+) -> Response:
+    """Paginate ``queryset`` with the shared v2 pagination class and
+    serialize the current page.
+
+    Only ever used by new (Player/Fleet-Server) list endpoints — never
+    retrofitted onto the pre-existing ``/api/v2/assets`` (or any v1/
+    v1.1/v1.2 endpoint), whose bare-array response shape is part of
+    the frozen wire contract.
+    """
+    paginator = DefaultV2Pagination()
+    page = paginator.paginate_queryset(queryset, request)
+    serializer = serializer_class(page, many=True)
+    return paginator.get_paginated_response(serializer.data)
 
 
 def update_asset(asset: dict[str, Any], data: dict[str, Any]) -> None:

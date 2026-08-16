@@ -23,6 +23,7 @@ from anthias_server.api.models import AnthiasAPIToken
 from anthias_server.api.serializers import UpdateAssetSerializer
 from anthias_server.api.serializers.mixins import CreateAssetSerializerMixin
 from anthias_server.app.models import (
+    AUTHORITY_CHOICES,
     DURATION_S_MAX,
     MAX_ASSET_HEADERS,
     REFRESH_INTERVAL_S_MAX,
@@ -32,6 +33,7 @@ from anthias_server.app.models import (
     validate_asset_headers,
 )
 from anthias_server.django_project.settings import is_valid_time_zone
+from anthias_server.fleet_link.models import Command, SyncState
 
 
 def _normalise_play_days(value: list[int]) -> list[int]:
@@ -594,3 +596,111 @@ class CreateApiTokenSerializerV2(Serializer[Any]):
     # needs to be longer than this.
     name = CharField(max_length=200)
     expires_at = DateTimeField(required=False, allow_null=True)
+
+
+# ---------------------------------------------------------------------------
+# Player/Fleet-Server integration — read-only views over fleet_link state.
+# See CLAUDE.md's "Two-product direction" section for what these are and
+# aren't yet wired up to.
+
+
+class PlayerIdentitySerializerV2(Serializer[Any]):
+    device_id = CharField()
+    management_state = ChoiceField(
+        choices=[
+            ('standalone', 'Standalone'),
+            ('pending', 'Pending'),
+            ('paired', 'Paired'),
+        ]
+    )
+    fleet_base_url = CharField(allow_null=True)
+
+
+class PlayerPolicySerializerV2(Serializer[Any]):
+    """Current per-domain management authority.
+
+    Always all-'local' until pairing (a later phase) exists — see
+    ``fleet_link.models.FleetPairing``.
+    """
+
+    content_authority = ChoiceField(choices=AUTHORITY_CHOICES)
+    playlist_authority = ChoiceField(choices=AUTHORITY_CHOICES)
+    schedule_authority = ChoiceField(choices=AUTHORITY_CHOICES)
+    config_authority = ChoiceField(choices=AUTHORITY_CHOICES)
+
+
+class PlaylistItemSerializerV2(ModelSerializer[Asset]):
+    """The Player's single flat ordered asset list, shaped for
+    UI/API symmetry with the Fleet Server's Playlist concept.
+
+    Not backed by a separate Playlist table — see the plan's
+    playlists/schedules section for why that's the deliberate,
+    minimal-diff choice.
+    """
+
+    class Meta:
+        model = Asset
+        fields: ClassVar = [
+            'asset_id',
+            'name',
+            'play_order',
+            'duration',
+            'is_enabled',
+            'origin',
+            'authority',
+        ]
+        read_only_fields: ClassVar = fields
+
+
+class ScheduleItemSerializerV2(ModelSerializer[Asset]):
+    """Per-asset schedule fields, shaped as a read model distinct from
+    the asset CRUD surface — same non-table-backed rationale as
+    ``PlaylistItemSerializerV2``."""
+
+    play_days = SerializerMethodField()
+
+    class Meta:
+        model = Asset
+        fields: ClassVar = [
+            'asset_id',
+            'name',
+            'start_date',
+            'end_date',
+            'play_days',
+            'play_time_from',
+            'play_time_to',
+            'authority',
+        ]
+        read_only_fields: ClassVar = fields
+
+    @extend_schema_field({'type': 'array', 'items': {'type': 'integer'}})
+    def get_play_days(self, obj: Asset) -> list[int]:
+        return obj.get_play_days()
+
+
+class CommandSerializerV2(ModelSerializer[Command]):
+    class Meta:
+        model = Command
+        fields: ClassVar = [
+            'command_id',
+            'type',
+            'status',
+            'result',
+            'created_at',
+            'completed_at',
+        ]
+        read_only_fields: ClassVar = fields
+
+
+class SyncStateSerializerV2(ModelSerializer[SyncState]):
+    class Meta:
+        model = SyncState
+        fields: ClassVar = [
+            'domain',
+            'desired_version',
+            'applied_version',
+            'last_attempt_at',
+            'last_success_at',
+            'last_error',
+        ]
+        read_only_fields: ClassVar = fields

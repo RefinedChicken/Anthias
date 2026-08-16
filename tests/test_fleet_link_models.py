@@ -23,7 +23,7 @@ from anthias_server.fleet_link.models import (
 def _make_asset(**kwargs: object) -> Asset:
     defaults: dict[str, object] = {'name': 'test-asset'}
     defaults.update(kwargs)
-    return Asset.objects.create(**defaults)  # type: ignore[arg-type]
+    return Asset.objects.create(**defaults)
 
 
 @pytest.mark.django_db

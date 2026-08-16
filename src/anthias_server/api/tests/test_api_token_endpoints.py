@@ -46,7 +46,7 @@ def test_list_tokens_returns_only_operators_own_tokens() -> None:
     response = client.get(_list_url())
 
     assert response.status_code == 200
-    names = {row['name'] for row in response.json()}
+    names = {row['name'] for row in response.json()['results']}
     assert names == {'mine'}
 
 
@@ -60,7 +60,7 @@ def test_list_tokens_never_includes_the_hash() -> None:
     response = client.get(_list_url())
 
     assert response.status_code == 200
-    row = response.json()[0]
+    row = response.json()['results'][0]
     assert 'token_hash' not in row
     assert 'token' not in row
     assert row['prefix']
@@ -72,7 +72,7 @@ def test_list_tokens_without_operator_account_is_empty() -> None:
     response = client.get(_list_url())
 
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json()['results'] == []
 
 
 @pytest.mark.django_db

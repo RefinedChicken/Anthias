@@ -804,6 +804,22 @@ REST_FRAMEWORK = {
         'anthias_server.lib.auth.DeprecatedBasicAuthentication',
         'anthias_server.lib.auth.GatedSessionAuthentication',
     ],
+    # Scoped rate limits for the Player/Fleet-Server endpoints, which
+    # declare `throttle_classes = [ScopedRateThrottle]` + a matching
+    # `throttle_scope` individually — this dict has no effect on any
+    # view that doesn't opt in (no DEFAULT_THROTTLE_CLASSES is set),
+    # so every pre-existing endpoint keeps its current unthrottled
+    # behaviour unchanged.
+    'DEFAULT_THROTTLE_RATES': {
+        # Read views over local Player/fleet-link state
+        # (player/identity, player/policy, playlists, schedules,
+        # management/*) — generous enough for a dashboard polling
+        # every few seconds, still bounded.
+        'player_management': '120/min',
+        # Token issue/list/revoke — more security-sensitive than a
+        # plain read, so a tighter bound.
+        'api_tokens': '30/min',
+    },
 }
 
 SPECTACULAR_SETTINGS = {
@@ -812,6 +828,13 @@ SPECTACULAR_SETTINGS = {
     'PREPROCESSING_HOOKS': [
         'anthias_server.api.api_docs_filter_spec.preprocessing_filter_spec'
     ],
+    # AUTHORITY_CHOICES backs several differently-named fields
+    # (Asset.origin/authority, FleetPairing's four per-domain
+    # authority fields) — one canonical enum name so drf-spectacular
+    # doesn't warn about "multiple names for the same choice set".
+    'ENUM_NAME_OVERRIDES': {
+        'AuthorityEnum': 'anthias_server.app.models.AUTHORITY_CHOICES',
+    },
 }
 
 # django-dbbackup v5 moved storage config under Django 5's STORAGES

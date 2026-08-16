@@ -17,6 +17,7 @@ from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.request import Request
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from anthias_common import device_helper
@@ -32,6 +33,7 @@ from anthias_common.utils import (
 from anthias_server.api.helpers import (
     AssetCreationError,
     finalize_asset_update,
+    paginate_queryset_response,
     persist_new_asset,
 )
 from anthias_server.api.models import AnthiasAPIToken
@@ -39,14 +41,20 @@ from anthias_server.api.serializers.v2 import (
     ApiTokenCreatedSerializerV2,
     ApiTokenSerializerV2,
     AssetSerializerV2,
+    CommandSerializerV2,
     CreateApiTokenSerializerV2,
     CreateAssetSerializerV2,
     DeviceSettingsSerializerV2,
     ImportItemSerializerV2,
     ImportValidateSerializerV2,
     IntegrationsSerializerV2,
+    PlayerIdentitySerializerV2,
+    PlayerPolicySerializerV2,
+    PlaylistItemSerializerV2,
+    ScheduleItemSerializerV2,
     ScreenlyMigrateAssetSerializerV2,
     ScreenlyTokenSerializerV2,
+    SyncStateSerializerV2,
     UpdateAssetSerializerV2,
     UpdateDeviceSettingsSerializerV2,
     ViewerPlaylistSerializerV2,
@@ -69,7 +77,13 @@ from anthias_server.app.helpers import (
     add_default_assets,
     remove_default_assets,
 )
-from anthias_server.app.models import Asset
+from anthias_server.app.models import AUTHORITY_LOCAL, Asset
+from anthias_server.fleet_link.models import (
+    Command,
+    FleetPairing,
+    PlayerIdentity,
+    SyncState,
+)
 from anthias_server.lib import diagnostics
 from anthias_server.lib.auth import (
     AuthSettingsError,
@@ -813,6 +827,9 @@ class ApiTokenListViewV2(APIView):
     here so both surfaces agree on when token issuance is possible.
     """
 
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'api_tokens'
+
     @extend_schema(
         summary='List API tokens',
         responses={200: ApiTokenSerializerV2(many=True)},
@@ -825,7 +842,9 @@ class ApiTokenListViewV2(APIView):
             if operator is not None
             else AnthiasAPIToken.objects.none()
         )
-        return Response(ApiTokenSerializerV2(tokens, many=True).data)
+        return paginate_queryset_response(
+            request, tokens, ApiTokenSerializerV2
+        )
 
     @extend_schema(
         summary='Create an API token',
@@ -885,6 +904,9 @@ class ApiTokenListViewV2(APIView):
 class ApiTokenDetailViewV2(APIView):
     """Revoke a single ``AnthiasAPIToken`` row."""
 
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'api_tokens'
+
     @extend_schema(
         summary='Revoke an API token',
         responses={
@@ -915,6 +937,161 @@ class ApiTokenDetailViewV2(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class _PlayerManagementThrottled(APIView):
+    """Shared throttle config for the Player/Fleet-Server read views
+    below — a generous but bounded rate, distinct from the
+    ``api_tokens`` scope (these are plain reads, not credential
+    management)."""
+
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'player_management'
+
+
+class PlayerIdentityViewV2(_PlayerManagementThrottled):
+    """This device's stable identity and current pairing status.
+
+    ``management_state`` is 'standalone' whenever there's no
+    non-revoked ``FleetPairing`` row — true for every Player today,
+    since pairing itself isn't built yet (a later phase). Landing this
+    endpoint now means nothing about its shape has to change once
+    pairing exists; only the values will.
+    """
+
+    @extend_schema(
+        summary='Player identity and pairing status',
+        responses={200: PlayerIdentitySerializerV2},
+    )
+    @authorized
+    def get(self, request: Request) -> Response:
+        identity = PlayerIdentity.get_or_create()
+        pairing = FleetPairing.current()
+
+        management_state = 'standalone'
+        fleet_base_url = None
+        if pairing is not None:
+            fleet_base_url = pairing.fleet_base_url
+            management_state = (
+                'paired'
+                if pairing.status == FleetPairing.ACTIVE
+                else 'pending'
+            )
+
+        return Response(
+            PlayerIdentitySerializerV2(
+                {
+                    'device_id': str(identity.device_id),
+                    'management_state': management_state,
+                    'fleet_base_url': fleet_base_url,
+                }
+            ).data
+        )
+
+
+class PlayerPolicyViewV2(_PlayerManagementThrottled):
+    """Read-only view of the current per-domain management authority.
+
+    All four domains report 'local' whenever there's no active
+    pairing — see ``fleet_link.models.FleetPairing`` for why this is
+    four independent fields rather than one boolean.
+    """
+
+    @extend_schema(
+        summary='Current management-authority policy',
+        responses={200: PlayerPolicySerializerV2},
+    )
+    @authorized
+    def get(self, request: Request) -> Response:
+        pairing = FleetPairing.current()
+        data = {
+            'content_authority': (
+                pairing.content_authority if pairing else AUTHORITY_LOCAL
+            ),
+            'playlist_authority': (
+                pairing.playlist_authority if pairing else AUTHORITY_LOCAL
+            ),
+            'schedule_authority': (
+                pairing.schedule_authority if pairing else AUTHORITY_LOCAL
+            ),
+            'config_authority': (
+                pairing.config_authority if pairing else AUTHORITY_LOCAL
+            ),
+        }
+        return Response(PlayerPolicySerializerV2(data).data)
+
+
+class PlaylistListViewV2(_PlayerManagementThrottled):
+    """The Player's ordered asset list, shaped for symmetry with the
+    Fleet Server's Playlist concept. Not a new table — see
+    ``PlaylistItemSerializerV2``."""
+
+    @extend_schema(
+        summary='Materialized playlist (ordered assets)',
+        responses={200: PlaylistItemSerializerV2(many=True)},
+    )
+    @authorized
+    def get(self, request: Request) -> Response:
+        queryset = Asset.objects.all().order_by('play_order', 'asset_id')
+        return paginate_queryset_response(
+            request, queryset, PlaylistItemSerializerV2
+        )
+
+
+class ScheduleListViewV2(_PlayerManagementThrottled):
+    """Per-asset schedule fields as a read model distinct from asset
+    CRUD — see ``ScheduleItemSerializerV2``."""
+
+    @extend_schema(
+        summary='Per-asset schedule',
+        responses={200: ScheduleItemSerializerV2(many=True)},
+    )
+    @authorized
+    def get(self, request: Request) -> Response:
+        queryset = Asset.objects.all().order_by('play_order', 'asset_id')
+        return paginate_queryset_response(
+            request, queryset, ScheduleItemSerializerV2
+        )
+
+
+class ManagementCommandsViewV2(_PlayerManagementThrottled):
+    """Commands received from the Fleet Server, most recent first.
+
+    Read-only for now: nothing creates ``Command`` rows yet (command
+    delivery + execution is a later phase) so this always returns an
+    empty page today. Landed ahead of that work so the shape is
+    settled.
+    """
+
+    @extend_schema(
+        summary='Commands received from the Fleet Server',
+        responses={200: CommandSerializerV2(many=True)},
+    )
+    @authorized
+    def get(self, request: Request) -> Response:
+        return paginate_queryset_response(
+            request, Command.objects.all(), CommandSerializerV2
+        )
+
+
+class ManagementSyncStateViewV2(_PlayerManagementThrottled):
+    """Per-domain desired/applied sync status.
+
+    Read-only for now: nothing writes ``SyncState`` rows yet (the sync
+    engine is a later phase) so this always returns an empty page
+    today.
+    """
+
+    @extend_schema(
+        summary='Per-domain sync status',
+        responses={200: SyncStateSerializerV2(many=True)},
+    )
+    @authorized
+    def get(self, request: Request) -> Response:
+        queryset = SyncState.objects.all().order_by('domain')
+        return paginate_queryset_response(
+            request, queryset, SyncStateSerializerV2
+        )
 
 
 class ViewerPlaylistViewV2(APIView):
