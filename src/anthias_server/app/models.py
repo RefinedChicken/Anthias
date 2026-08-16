@@ -202,6 +202,21 @@ def _default_play_days() -> str:
     return json.dumps(ALL_DAYS)
 
 
+# Shared "who owns this" vocabulary for the Player/Fleet-Server split.
+# Used by both ``Asset.origin``/``Asset.authority`` below and
+# ``fleet_link.models.FleetPairing``'s per-domain authority fields.
+# Defined here (not in ``fleet_link``) so it's importable from every
+# service, including the viewer: this module is in the base
+# INSTALLED_APPS tier the viewer loads, ``fleet_link`` is not (see
+# ``django_project.settings.INSTALLED_APPS``).
+AUTHORITY_LOCAL = 'local'
+AUTHORITY_FLEET = 'fleet'
+AUTHORITY_CHOICES = [
+    (AUTHORITY_LOCAL, 'Local'),
+    (AUTHORITY_FLEET, 'Fleet'),
+]
+
+
 class Asset(models.Model):
     asset_id = models.TextField(
         primary_key=True, default=generate_asset_id, editable=False
@@ -240,12 +255,59 @@ class Asset(models.Model):
     # None) so callers can ``asset.metadata['k'] = v`` without an
     # ``or {}`` guard.
     metadata = models.JSONField(default=dict, blank=True)
+    # Where this row came from, set once at creation and never changed
+    # again — enforced by save() below. Distinct from ``authority``
+    # (who currently governs writes to it): unpairing flips a fleet
+    # row's ``authority`` back to 'local' but deliberately leaves
+    # ``origin`` at 'fleet' so a later re-pair can tell "a stale local
+    # copy of fleet media" from "the local admin's own asset" instead
+    # of treating every row as a fresh unknown.
+    origin = models.CharField(
+        max_length=8,
+        choices=AUTHORITY_CHOICES,
+        default=AUTHORITY_LOCAL,
+    )
+    # Who currently governs writes to this row's content/schedule
+    # fields. 'fleet' means the local UI/API treats it read-only
+    # (except the runtime fields the Player always owns regardless —
+    # is_reachable/last_reachability_check, playback position). Mutable:
+    # sync sets it to 'fleet' on ingest, unpairing sets it back to
+    # 'local'.
+    authority = models.CharField(
+        max_length=8,
+        choices=AUTHORITY_CHOICES,
+        default=AUTHORITY_LOCAL,
+    )
+    # The Fleet Server's canonical Media UUID this row was materialized
+    # from. Kept even after unpair (see ``origin`` above) — cleared
+    # only if the row itself is deleted.
+    fleet_media_id = models.TextField(blank=True, null=True)
+    # Which Fleet Deployment produced this row, for reconciliation
+    # diffing against a newer desired-state fetch.
+    source_deployment_id = models.TextField(blank=True, null=True)
+    # The Deployment/Playlist version this row currently reflects.
+    deployed_version = models.IntegerField(blank=True, null=True)
 
     class Meta:
         db_table = 'assets'
 
     def __str__(self) -> str:
         return str(self.name)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if self.pk:
+            previous_origin = (
+                Asset.objects.filter(pk=self.pk)
+                .values_list('origin', flat=True)
+                .first()
+            )
+            if previous_origin is not None and previous_origin != self.origin:
+                raise ValueError(
+                    'Asset.origin is immutable once set (got '
+                    f'{previous_origin!r} -> {self.origin!r} for '
+                    f'{self.pk!r}).'
+                )
+        super().save(*args, **kwargs)
 
     def get_play_days(self) -> list[int]:
         """Parse play_days into a sorted, deduped list of ints 1-7.

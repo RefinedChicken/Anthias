@@ -41,6 +41,11 @@ ASSET_X = {
     'is_reachable': True,
     'last_reachability_check': None,
     'metadata': {},
+    'origin': 'local',
+    'authority': 'local',
+    'fleet_media_id': None,
+    'source_deployment_id': None,
+    'deployed_version': None,
 }
 
 ASSET_X_DIFF = {'duration': 10}
@@ -65,6 +70,11 @@ ASSET_Y = {
     'is_reachable': True,
     'last_reachability_check': None,
     'metadata': {},
+    'origin': 'local',
+    'authority': 'local',
+    'fleet_media_id': None,
+    'source_deployment_id': None,
+    'deployed_version': None,
 }
 
 ASSET_Z = {
@@ -87,6 +97,11 @@ ASSET_Z = {
     'is_reachable': True,
     'last_reachability_check': None,
     'metadata': {},
+    'origin': 'local',
+    'authority': 'local',
+    'fleet_media_id': None,
+    'source_deployment_id': None,
+    'deployed_version': None,
 }
 
 ASSET_TOMORROW = {
@@ -109,6 +124,11 @@ ASSET_TOMORROW = {
     'is_reachable': True,
     'last_reachability_check': None,
     'metadata': {},
+    'origin': 'local',
+    'authority': 'local',
+    'fleet_media_id': None,
+    'source_deployment_id': None,
+    'deployed_version': None,
 }
 
 FAKE_DB_PATH = '/tmp/fakedb'
