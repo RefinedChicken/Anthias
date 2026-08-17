@@ -11,15 +11,28 @@ Anthias is an open-source digital signage platform for Raspberry Pi and x86 PCs 
 This fork is being expanded, incrementally, into two coordinated products without breaking the one that already works today:
 
 - **Anthias Player** — this repo, largely as described below. A standalone, API-driven, locally-authenticated device that never depends on anything external to run. It is the execution/data plane: playback, local media storage, rendering, scheduling, hardware/display/network config, diagnostics, local auth.
-- **Fleet Server** — a new control-plane service, added as `src/anthias_fleet_server/` (new Django project, own PostgreSQL database), not yet present in the tree beyond groundwork on the Player side. It pairs with many Players, holds desired state (content/playlists/schedules/config) for them, and issues commands, while each Player keeps executing independently.
+- **Fleet Server** — a new control-plane service, `src/anthias_fleet_server/` (separate Django project, own PostgreSQL database, own `manage.py`/settings/URLconf — not a module of `anthias_server`). It pairs with many Players, holds desired state (content/playlists/schedules/config) for them, and issues commands, while each Player keeps executing independently.
 
 Core principle: **a Player owns its local runtime state; content/configuration authority can be delegated to a Fleet Server.** When paired, Fleet is authoritative for fleet-managed resources; the Player is always authoritative for execution/runtime state and keeps playing already-deployed content if the Fleet Server is unreachable — playback never depends on the Fleet Server, because the viewer reads local SQLite directly and never called out to the API for its playlist to begin with. Transport is Player-initiated only (outbound HTTPS poll baseline + a persistent outbound WebSocket for near-real-time commands, with automatic fallback to polling) — the Fleet Server never dials into a Player for normal operation.
 
 Landed so far:
-- `AnthiasAPIToken` bearer-token auth (`src/anthias_server/lib/auth.py`, `src/anthias_server/api/models.py`) — the credential a Fleet Server (or any other unattended caller) uses against a Player's REST API, distinct from operator session/password auth.
-- REST management of those tokens at `/api/v2/auth/tokens` (list/create) and `/api/v2/auth/tokens/<id>` (revoke) — `src/anthias_server/api/views/v2.py`, `serializers/v2.py`, `urls/v2.py`. Session-authenticated only; a bearer token cannot be used to mint or revoke other tokens (`_reject_bearer_token_auth`).
+- **Player side**: `AnthiasAPIToken` bearer-token auth (`src/anthias_server/lib/auth.py`, `src/anthias_server/api/models.py`) plus REST management of it at `/api/v2/auth/tokens`; the `fleet_link` app (`PlayerIdentity`, `FleetPairing`, `SyncState`, `Command` models) and `Asset.origin`/`authority`/`fleet_media_id`/`source_deployment_id`/`deployed_version`; read-only `/api/v2/player/identity`, `/api/v2/player/policy`, `/api/v2/playlists`, `/api/v2/schedules`, `/api/v2/management/commands`, `/api/v2/management/sync-state`. No pairing handshake is wired up yet, so every Player is standalone today regardless of these models existing.
+- **Fleet Server side**: the service itself (`src/anthias_fleet_server/`) — `core` app (`Organization`, `Membership`/role, `Group`, `Player`, `Media`, `Playlist`/`PlaylistItem`, `Deployment` models + Django admin) and `api` app (DRF `ModelViewSet`s under `/api/`, RBAC via `api/permissions.py`'s `HasMinimumRole`, org-scoped so a client only ever sees its own org's rows). Media upload is content-addressed (SHA-256, re-uploading identical bytes returns the existing row rather than duplicating storage). `bootstrap_org` management command provisions the first Organization + Owner. Dev stack: `docker-compose.fleet.dev.yml` (`fleet-server` + Postgres `fleet-db`, port 8100) — separate from the Player's own `docker-compose.dev.yml`, run either or both together.
+- **Not yet built**: the pairing protocol connecting a real Player to a real Fleet Server, the desired-state sync engine, and command delivery/execution. A Fleet Server `Player` row and a device's own `PlayerIdentity` are, today, two records that don't know about each other yet — see `Player.device_id`'s docstring.
 
-Not yet built: Player identity/pairing-policy models, the `src/anthias_fleet_server/` service itself, the pairing protocol, and the desired-state sync engine. Treat any code or docs suggesting otherwise as stale — this section is the single source of truth for where the two-product effort currently stands; update it alongside the work, don't let it drift.
+Treat any code or docs suggesting otherwise as stale — this section is the single source of truth for where the two-product effort currently stands; update it alongside the work, don't let it drift.
+
+### Fleet Server dev commands
+
+```bash
+docker compose -f docker-compose.fleet.dev.yml up -d --build   # start (port 8100)
+uv sync --group test --group fleet-server                       # local deps
+DJANGO_SETTINGS_MODULE=anthias_fleet_server.django_project.settings ENVIRONMENT=test \
+    uv run pytest src/anthias_fleet_server                      # tests (own DB/settings — always run as a separate invocation, never mixed with the Player's own `pytest` run)
+ENVIRONMENT=test uv run mypy --config-file mypy-fleet-server.ini src/anthias_fleet_server   # types (own config — see the file for why)
+docker compose -f docker-compose.fleet.dev.yml exec fleet-server \
+    python -m anthias_fleet_server.manage bootstrap_org <username>   # first-time org+owner setup, after createsuperuser
+```
 
 ## Architecture
 

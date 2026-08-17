@@ -1,0 +1,52 @@
+# vim: ft=yaml.docker-compose
+#
+# Fleet Server dev stack — separate from docker-compose.dev.yml (the
+# Player's own dev stack) on purpose: these are two coordinated but
+# independently deployable products (see CLAUDE.md's "Two-product
+# direction" section). Bring both up side by side with:
+#
+#   docker compose -f docker-compose.dev.yml -f docker-compose.fleet.dev.yml up -d --build
+#
+# or the Fleet Server alone with just -f docker-compose.fleet.dev.yml.
+
+services:
+  fleet-server:
+    image: anthias-fleet-server:dev
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.fleet-server
+    ports:
+      - 8100:8080
+    environment:
+      - ENVIRONMENT=development
+      - LISTEN=0.0.0.0
+      - FLEET_POSTGRES_HOST=fleet-db
+      - FLEET_POSTGRES_DB=anthias_fleet
+      - FLEET_POSTGRES_USER=anthias_fleet
+      - FLEET_POSTGRES_PASSWORD=anthias_fleet
+    depends_on:
+      fleet-db:
+        condition: service_healthy
+    restart: always
+    volumes:
+      - fleet-media:/data/media
+      - ./:/usr/src/app/
+
+  fleet-db:
+    image: mirror.gcr.io/library/postgres:17-alpine
+    environment:
+      - POSTGRES_DB=anthias_fleet
+      - POSTGRES_USER=anthias_fleet
+      - POSTGRES_PASSWORD=anthias_fleet
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anthias_fleet"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - fleet-db-data:/var/lib/postgresql/data
+
+volumes:
+  fleet-media:
+  fleet-db-data:

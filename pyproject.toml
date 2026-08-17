@@ -164,6 +164,19 @@ mypy = [
     "sentry-sdk==2.66.1",
     "whitenoise==6.12.0",
 ]
+fleet-server = [
+    # Kept in lockstep with the `server` group's pins for the packages
+    # both services share (Django/DRF/drf-spectacular/uvicorn/
+    # whitenoise) — same framework, same version, two separate
+    # deployable services (see CLAUDE.md's "Two-product direction").
+    "Django==5.2.14",
+    "django-stubs-ext==6.0.7",
+    "djangorestframework==3.17.1",
+    "drf-spectacular==0.30.0",
+    "psycopg[binary]==3.3.4",
+    "uvicorn[standard]==0.52.1",
+    "whitenoise==6.12.0",
+]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "anthias_server.django_project.settings"
@@ -244,6 +257,14 @@ exclude = [
     # Build-time-only stdlib shims (imp/pipes/cgi) for Chromium 87's
     # Python-2-era build tooling; not app code, emulate removed stdlib.
     "^src/anthias_webview/pyshim/",
+    # django-stubs' mypy plugin only supports one `django_settings_module`
+    # per run (`[tool.django-stubs]` below points at anthias_server's).
+    # anthias_fleet_server is a second, separate Django project with its
+    # own app registry — type-checking it against the Player's settings
+    # module would produce spurious "app not installed" errors. It has
+    # its own config (mypy-fleet-server.ini) and its own invocation; see
+    # CLAUDE.md's "Two-product direction" section for the command.
+    "^src/anthias_fleet_server/",
 ]
 
 [[tool.mypy.overrides]]

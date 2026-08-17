@@ -64,6 +64,12 @@ db.sqlite3
 .anthias-test.db-wal
 .anthias-test.db-shm
 
+# Same idea for the Fleet Server's own local pytest SQLite DB + media
+# root (src/anthias_fleet_server/django_project/settings.py, also
+# ENVIRONMENT=test).
+src/anthias_fleet_server/.fleet-test.db
+src/anthias_fleet_server/.fleet-test-media/
+
 # Local agent state (Claude Code). Ignore everything under .claude by default —
 # git worktrees, unfiltered local memory, caches — but keep the curated,
 # PII-scrubbed knowledge base that ships with the repo (so it tracks without a
