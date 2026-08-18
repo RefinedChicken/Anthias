@@ -56,6 +56,14 @@ class FleetPairing(models.Model):
     "no active pairing" is expressed as "no row with a non-revoked
     status", not "no row at all". Use :meth:`current` rather than
     querying the table directly.
+
+    A completed pairing (``status='active'``) deliberately leaves all
+    four authority fields at their ``local`` default — negotiating
+    per-domain authority at approval time is explicit scope left to
+    the desired-state sync engine (a later phase), since nothing
+    reconciles Asset rows yet and there is no policy to enforce. Read
+    "paired with everything still local" as intentional here, not a
+    bug; the sync engine phase is what starts flipping these.
     """
 
     PENDING = 'pending'
@@ -69,6 +77,21 @@ class FleetPairing(models.Model):
 
     fleet_base_url = models.URLField()
     fleet_org_id = models.TextField(blank=True, null=True)
+    # The pairing code pair (plan §8, step 2) — generated here, not by
+    # Fleet: ``pairing_user_code`` is the short value shown on-screen
+    # for a human to read off and type into the Fleet dashboard;
+    # ``pairing_device_code`` is the long secret this device alone
+    # knows and echoes back on every poll (fleet_link.tasks.
+    # poll_fleet_pairing), proving continuity of the same device
+    # across retries. Both are cleared (set back to blank) once the
+    # pairing completes or is abandoned — a spent pairing secret has
+    # no further use and shouldn't linger in the row. Never confuse
+    # ``pairing_device_code`` with ``device_credential`` below: the
+    # former only ever proves "same device polling," the latter is
+    # the real bearer credential used for every call once paired.
+    pairing_user_code = models.CharField(max_length=16, blank=True, null=True)
+    pairing_device_code = models.TextField(blank=True, null=True)
+    pairing_code_expires_at = models.DateTimeField(blank=True, null=True)
     # Opaque reference to the device credential issued at pairing time.
     # Stored in the clear, same posture as the rest of Anthias's
     # device-level config (``anthias.conf``) — there is no OS-keyring

@@ -308,6 +308,15 @@ def wait_for_migrations(**kwargs: Any) -> None:
 
 @celery.on_after_configure.connect
 def setup_periodic_tasks(sender: Any, **kwargs: Any) -> None:
+    # Deferred import: fleet_link.tasks imports the ``celery`` app
+    # instance from this module, so importing it at module level here
+    # (before that assignment runs, further down this file) would be
+    # circular.
+    from anthias_server.fleet_link.tasks import (
+        POLL_INTERVAL_S as FLEET_PAIRING_POLL_INTERVAL_S,
+    )
+    from anthias_server.fleet_link.tasks import poll_fleet_pairing
+
     # Calls cleanup() every hour.
     sender.add_periodic_task(3600, cleanup.s(), name='cleanup')
     sender.add_periodic_task(
@@ -325,6 +334,11 @@ def setup_periodic_tasks(sender: Any, **kwargs: Any) -> None:
         RECONCILE_STUCK_INTERVAL_S,
         reconcile_stuck_processing.s(),
         name='reconcile_stuck_processing',
+    )
+    sender.add_periodic_task(
+        FLEET_PAIRING_POLL_INTERVAL_S,
+        poll_fleet_pairing.s(),
+        name='poll_fleet_pairing',
     )
 
 

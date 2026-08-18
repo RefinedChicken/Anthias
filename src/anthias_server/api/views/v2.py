@@ -48,6 +48,8 @@ from anthias_server.api.serializers.v2 import (
     ImportItemSerializerV2,
     ImportValidateSerializerV2,
     IntegrationsSerializerV2,
+    PairingStartSerializerV2,
+    PairingStatusSerializerV2,
     PlayerIdentitySerializerV2,
     PlayerPolicySerializerV2,
     PlaylistItemSerializerV2,
@@ -1019,6 +1021,151 @@ class PlayerPolicyViewV2(_PlayerManagementThrottled):
             ),
         }
         return Response(PlayerPolicySerializerV2(data).data)
+
+
+# Crockford-base32-ish alphabet, minus visually ambiguous characters
+# (0/O, 1/I/L) — plan §8 step 2's "short human-readable pairing code",
+# e.g. '7K4P-92QX'. Not full Crockford (no checksum char): this code
+# is short-lived and single-use, not something transcribed once and
+# trusted indefinitely.
+_PAIRING_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+_PAIRING_CODE_TTL = timedelta(minutes=10)
+
+
+def _generate_pairing_user_code() -> str:
+    chars = [secrets.choice(_PAIRING_CODE_ALPHABET) for _ in range(8)]
+    return f'{"".join(chars[:4])}-{"".join(chars[4:])}'
+
+
+def _generate_pairing_device_code() -> str:
+    """The long secret only this device knows — proves continuity of
+    the same polling device across retries. 256 bits of entropy, same
+    budget as ``lib.auth.generate_api_token``."""
+    return secrets.token_urlsafe(32)
+
+
+def _pairing_status_payload(pairing: FleetPairing | None) -> dict[str, Any]:
+    if pairing is None:
+        return {
+            'status': 'standalone',
+            'fleet_base_url': None,
+            'pairing_user_code': None,
+            'pairing_code_expires_at': None,
+        }
+    return {
+        'status': pairing.status,
+        'fleet_base_url': pairing.fleet_base_url,
+        'pairing_user_code': pairing.pairing_user_code,
+        'pairing_code_expires_at': pairing.pairing_code_expires_at,
+    }
+
+
+class _PlayerPairingThrottled(APIView):
+    """Tighter throttle than plain reads — these mutate pairing state
+    or are the local-admin-facing counterpart to the Fleet-side
+    pairing-poll endpoint, which §17.1/§17.5 flag as needing bounds."""
+
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'player_pairing'
+
+
+class PlayerPairingStartViewV2(_PlayerPairingThrottled):
+    """Start a new pairing attempt against a Fleet Server.
+
+    Generates the pairing code pair locally (plan §8 step 2 — Fleet
+    never issues the code) and stores a new ``pending`` ``FleetPairing``
+    row; ``fleet_link.tasks.poll_fleet_pairing`` (a Celery beat task)
+    picks it up on its next tick and begins polling
+    ``{fleet_base_url}/api/pairing/poll``.
+
+    Refuses to start a second attempt while one is already pending or
+    active — ``FleetPairing.current()``'s contract is "at most one
+    non-revoked row at a time"; cancel the pending attempt, or unpair
+    (a later phase), first.
+    """
+
+    @extend_schema(
+        summary='Start pairing with a Fleet Server',
+        request=PairingStartSerializerV2,
+        responses={
+            201: PairingStatusSerializerV2,
+            409: {
+                'type': 'object',
+                'properties': {'error': {'type': 'string'}},
+            },
+        },
+    )
+    @authorized
+    def post(self, request: Request) -> Response:
+        if FleetPairing.current() is not None:
+            return Response(
+                {
+                    'error': (
+                        'A pairing is already pending or active. '
+                        'Cancel or unpair first.'
+                    ),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        serializer = PairingStartSerializerV2(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        pairing = FleetPairing.objects.create(
+            fleet_base_url=serializer.validated_data['fleet_base_url'],
+            status=FleetPairing.PENDING,
+            pairing_user_code=_generate_pairing_user_code(),
+            pairing_device_code=_generate_pairing_device_code(),
+            pairing_code_expires_at=timezone.now() + _PAIRING_CODE_TTL,
+        )
+        return Response(
+            _pairing_status_payload(pairing), status=status.HTTP_201_CREATED
+        )
+
+
+class PlayerPairingStatusViewV2(_PlayerPairingThrottled):
+    """Current pairing attempt/relationship, if any — for the local
+    settings UI to show the code and poll for approval."""
+
+    @extend_schema(
+        summary='Current pairing status',
+        responses={200: PairingStatusSerializerV2},
+    )
+    @authorized
+    def get(self, request: Request) -> Response:
+        return Response(_pairing_status_payload(FleetPairing.current()))
+
+
+class PlayerPairingCancelViewV2(_PlayerPairingThrottled):
+    """Abandon a pending pairing attempt.
+
+    Only valid while ``pending`` — matches the plan's interrupted-
+    pairing recovery: the row is deleted outright, same as what
+    happens automatically once the pairing code's TTL expires (see
+    ``fleet_link.tasks.poll_fleet_pairing``). Once ``active`` this is
+    not the unpair path (a later phase) — there is real fleet state to
+    unwind at that point, not just an abandoned attempt.
+    """
+
+    @extend_schema(
+        summary='Cancel a pending pairing attempt',
+        responses={
+            200: PairingStatusSerializerV2,
+            404: {
+                'type': 'object',
+                'properties': {'error': {'type': 'string'}},
+            },
+        },
+    )
+    @authorized
+    def post(self, request: Request) -> Response:
+        pairing = FleetPairing.current()
+        if pairing is None or pairing.status != FleetPairing.PENDING:
+            return Response(
+                {'error': 'No pending pairing attempt to cancel.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        pairing.delete()
+        return Response(_pairing_status_payload(None))
 
 
 class PlaylistListViewV2(_PlayerManagementThrottled):

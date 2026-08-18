@@ -16,6 +16,7 @@ from rest_framework.serializers import (
     Serializer,
     SerializerMethodField,
     TimeField,
+    URLField,
 )
 
 from anthias_common.utils import SCREEN_ROTATION_CHOICES
@@ -619,14 +620,43 @@ class PlayerIdentitySerializerV2(Serializer[Any]):
 class PlayerPolicySerializerV2(Serializer[Any]):
     """Current per-domain management authority.
 
-    Always all-'local' until pairing (a later phase) exists — see
-    ``fleet_link.models.FleetPairing``.
+    All-'local' whether standalone or paired — pairing (this phase)
+    doesn't negotiate per-domain authority; that's explicit scope for
+    the desired-state sync engine (a later phase). See
+    ``fleet_link.models.FleetPairing``'s class docstring.
     """
 
     content_authority = ChoiceField(choices=AUTHORITY_CHOICES)
     playlist_authority = ChoiceField(choices=AUTHORITY_CHOICES)
     schedule_authority = ChoiceField(choices=AUTHORITY_CHOICES)
     config_authority = ChoiceField(choices=AUTHORITY_CHOICES)
+
+
+class PairingStartSerializerV2(Serializer[Any]):
+    """Body of ``POST /api/v2/player/pairing/start``."""
+
+    fleet_base_url = URLField()
+
+
+class PairingStatusSerializerV2(Serializer[Any]):
+    """Shared response shape for the pairing start/status/cancel
+    endpoints. ``pairing_user_code`` is only ever non-null while
+    ``status == 'pending'`` — once ``active`` there is nothing left to
+    display; the code pair has already served its purpose and is
+    cleared from the row (see ``FleetPairing.pairing_user_code``).
+    """
+
+    status = ChoiceField(
+        choices=[
+            ('standalone', 'Standalone'),
+            ('pending', 'Pending'),
+            ('active', 'Active'),
+            ('revoked', 'Revoked'),
+        ]
+    )
+    fleet_base_url = CharField(allow_null=True)
+    pairing_user_code = CharField(allow_null=True)
+    pairing_code_expires_at = DateTimeField(allow_null=True)
 
 
 class PlaylistItemSerializerV2(ModelSerializer[Asset]):

@@ -15,7 +15,9 @@ from anthias_fleet_server.core.models import (
     Media,
     Membership,
     Organization,
+    PairingRequest,
     Player,
+    PlayerCredential,
     Playlist,
     PlaylistItem,
 )
@@ -48,6 +50,34 @@ class PlayerAdmin(admin.ModelAdmin[Player]):
     list_display = ('name', 'organization', 'device_id', 'created_at')
     list_filter = ('organization', 'groups')
     filter_horizontal = ('groups',)
+
+
+@admin.register(PlayerCredential)
+class PlayerCredentialAdmin(admin.ModelAdmin[PlayerCredential]):
+    list_display = ('prefix', 'player', 'issued_at', 'revoked_at')
+    list_filter = ('player__organization',)
+    readonly_fields = ('token_hash', 'prefix', 'issued_at', 'last_used_at')
+
+
+@admin.register(PairingRequest)
+class PairingRequestAdmin(admin.ModelAdmin[PairingRequest]):
+    list_display = (
+        'user_code',
+        'status',
+        'device_id',
+        'organization',
+        'player',
+        'created_at',
+        'expires_at',
+    )
+    list_filter = ('status', 'organization')
+    readonly_fields = (
+        'id',
+        'device_code_hash',
+        'created_at',
+        'approved_at',
+        'completed_at',
+    )
 
 
 @admin.register(Media)

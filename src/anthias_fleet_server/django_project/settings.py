@@ -181,6 +181,15 @@ REST_FRAMEWORK = {
         'rest_framework.pagination.PageNumberPagination'
     ),
     'PAGE_SIZE': 50,
+    # Only 'pairing' is used today (the unauthenticated poll/ack
+    # endpoints in api.pairing_views — see the plan's §17.1/§17.5:
+    # these are the two most exposed endpoints in the whole service,
+    # reachable before any auth exists). No view opts into throttling
+    # by default (no DEFAULT_THROTTLE_CLASSES), so every other
+    # endpoint is unaffected.
+    'DEFAULT_THROTTLE_RATES': {
+        'pairing': '30/min',
+    },
 }
 
 SPECTACULAR_SETTINGS = {

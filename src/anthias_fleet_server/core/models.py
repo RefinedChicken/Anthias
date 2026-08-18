@@ -138,6 +138,139 @@ class Player(models.Model):
         return self.name
 
 
+class PlayerCredential(models.Model):
+    """A bearer credential scoped to exactly one Player — never a human
+    ``User`` (see the plan's authentication-design section on why
+    human and device credentials never share a table). Same
+    hash-not-plaintext pattern as the Player-side ``AnthiasAPIToken``:
+    only ``token_hash`` is ever persisted, the raw value is returned
+    to the Player exactly once (at pairing-poll delivery time, see
+    ``api.pairing_views``) and can't be recovered afterwards.
+
+    Rotation is "issue a new row, revoke the old one" rather than an
+    in-place mutation — ``revoked_at`` on the superseded row is the
+    audit trail. Not constrained to one non-revoked row per Player at
+    the database level: the pairing hand-off deliberately reissues a
+    fresh credential on every poll until the Player acknowledges
+    receipt (see ``PairingRequest``), which transiently produces more
+    than one live row for the same Player by design.
+    """
+
+    player = models.ForeignKey(
+        'Player', on_delete=models.CASCADE, related_name='credentials'
+    )
+    token_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    prefix = models.CharField(max_length=12)
+    issued_at = models.DateTimeField(auto_now_add=True)
+    revoked_at = models.DateTimeField(blank=True, null=True)
+    last_used_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        db_table = 'player_credentials'
+        ordering: ClassVar = ['-issued_at']
+
+    def __str__(self) -> str:
+        state = 'revoked' if self.revoked_at else 'active'
+        return f'{self.prefix}… ({self.player}, {state})'
+
+
+class PairingRequest(models.Model):
+    """One Player's in-progress (or completed) pairing handshake.
+
+    The pairing code pair is Player-generated, not Fleet-issued (see
+    the plan's pairing-protocol section, step 2) — ``user_code`` is
+    the short value a human reads off the Player's screen and types
+    into the Fleet dashboard to approve; ``device_code_hash`` is the
+    SHA-256 of the long secret the Player alone knows and echoes back
+    on every poll, proving continuity of the same polling device
+    across retries (same hash-not-plaintext posture as
+    ``PlayerCredential``/``AnthiasAPIToken`` — the raw device code is
+    never stored). This row is created on the *first* poll that
+    presents a given device code (there is no separate "register"
+    call — see ``api.pairing_views.PairingPollView``), which is why
+    ``organization`` starts out null: nobody has authenticated yet, so
+    there is nothing to scope it to. It's filled in at approval time
+    from the *approving admin's* ``Membership``, the same scoping
+    every other Fleet view already uses — never inferred from
+    ``Organization.objects.first()``, which is "alphabetically first
+    org", not "the" org, and is wrong the moment a second org exists.
+
+    ``status`` has three states, not two: ``pending`` (waiting for an
+    admin), ``approved`` (admin approved; a credential is being
+    handed out on each poll until the Player proves it received one),
+    and ``completed`` (the Player called ``/api/pairing/ack`` with
+    that credential — the handshake is over, further polls are inert).
+    The reissue-until-ack behaviour in the ``approved`` state is what
+    makes an interrupted hand-off (Player approved, but the poll
+    response carrying the credential never arrived) safe to resume:
+    the previous credential is revoked and a fresh one issued each
+    time, so no lost-credential state is ever unrecoverable — see the
+    plan's "interrupted pairing" requirement.
+    """
+
+    PENDING = 'pending'
+    APPROVED = 'approved'
+    COMPLETED = 'completed'
+    STATUS_CHOICES: ClassVar = [
+        (PENDING, 'Pending'),
+        (APPROVED, 'Approved'),
+        (COMPLETED, 'Completed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='pairing_requests',
+        blank=True,
+        null=True,
+    )
+    user_code = models.CharField(max_length=16, db_index=True)
+    device_code_hash = models.CharField(max_length=64, unique=True)
+    device_id = models.UUIDField(blank=True, null=True)
+    label = models.TextField(blank=True)
+    status = models.CharField(
+        max_length=9, choices=STATUS_CHOICES, default=PENDING
+    )
+    player = models.ForeignKey(
+        'Player',
+        on_delete=models.SET_NULL,
+        related_name='pairing_requests',
+        blank=True,
+        null=True,
+    )
+    # The credential most recently handed out for this request but
+    # not yet acknowledged — see the class docstring's "reissue until
+    # ack" note. Cleared (not just left dangling) once acknowledged;
+    # SET_NULL rather than CASCADE so revoking/deleting a credential
+    # row never takes this request row down with it.
+    pending_credential = models.ForeignKey(
+        PlayerCredential,
+        on_delete=models.SET_NULL,
+        related_name='+',
+        blank=True,
+        null=True,
+    )
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    approved_at = models.DateTimeField(blank=True, null=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name='pairing_requests_approved',
+        blank=True,
+        null=True,
+    )
+    completed_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        db_table = 'pairing_requests'
+        ordering: ClassVar = ['-created_at']
+
+    def __str__(self) -> str:
+        return f'{self.user_code} ({self.status})'
+
+
 class Media(models.Model):
     """Canonical content library entry.
 

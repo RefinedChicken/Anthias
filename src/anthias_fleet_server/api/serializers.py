@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from rest_framework.serializers import ModelSerializer, ValidationError
+from rest_framework.serializers import (
+    CharField,
+    IntegerField,
+    ModelSerializer,
+    Serializer,
+    UUIDField,
+    ValidationError,
+)
 
 from anthias_fleet_server.core.models import (
     Deployment,
@@ -10,6 +17,7 @@ from anthias_fleet_server.core.models import (
     Media,
     Membership,
     Organization,
+    PairingRequest,
     Player,
     Playlist,
     PlaylistItem,
@@ -71,6 +79,63 @@ class PlayerSerializer(ModelSerializer[Player]):
                 'One or more groups belong to a different organization.'
             )
         return groups
+
+
+class PairingPollRequestSerializer(Serializer[Any]):
+    """Body of the unauthenticated ``POST /api/pairing/poll`` call —
+    see ``api.pairing_views.PairingPollView``. Not a ``ModelSerializer``:
+    ``device_code`` is never persisted (only its hash is), and this
+    shape doesn't map 1:1 onto ``PairingRequest`` either way (the
+    first poll for a given device code creates the row; later polls
+    just look it up).
+    """
+
+    device_code = CharField(max_length=128, trim_whitespace=False)
+    user_code = CharField(max_length=16)
+    device_id = UUIDField(required=False, allow_null=True)
+    # Named device_label, not label — 'label' collides with
+    # rest_framework.fields.Field's own same-named attribute (a
+    # child field's display label), which mypy flags even though DRF
+    # handles it fine at runtime.
+    device_label = CharField(required=False, allow_blank=True, max_length=200)
+
+
+class PairingRequestSerializer(ModelSerializer[PairingRequest]):
+    """Admin-facing read model for the Fleet dashboard's pairing-
+    approval screen — read-only, since a request is only ever created
+    by a Player's own poll and only ever transitioned by the
+    dedicated ``approve`` action (see ``PairingRequestViewSet``), not
+    generic field-level PATCH/PUT.
+    """
+
+    class Meta:
+        model = PairingRequest
+        fields: ClassVar = [
+            'id',
+            'user_code',
+            'device_id',
+            'label',
+            'status',
+            'organization',
+            'player',
+            'created_at',
+            'expires_at',
+            'approved_at',
+            'approved_by',
+            'completed_at',
+        ]
+        read_only_fields: ClassVar = fields
+
+
+class PairingApproveSerializer(Serializer[Any]):
+    """Body of the admin-facing ``approve`` action — both fields
+    optional. ``player_id`` targets an existing Player row (rejected
+    if it's already bound to a *different* device — see the view);
+    ``name`` only matters when a new Player row is being created.
+    """
+
+    player_id = IntegerField(required=False)
+    name = CharField(required=False, allow_blank=True, max_length=200)
 
 
 class MediaSerializer(ModelSerializer[Media]):

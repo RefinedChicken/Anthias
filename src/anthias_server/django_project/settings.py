@@ -819,6 +819,11 @@ REST_FRAMEWORK = {
         # Token issue/list/revoke — more security-sensitive than a
         # plain read, so a tighter bound.
         'api_tokens': '30/min',
+        # Pairing start/status/cancel — mutates pairing state and is
+        # the local-admin-facing counterpart to the Fleet-side
+        # pairing-poll endpoint, which the plan's §17.1/§17.5 flag as
+        # needing bounds.
+        'player_pairing': '20/min',
     },
 }
 

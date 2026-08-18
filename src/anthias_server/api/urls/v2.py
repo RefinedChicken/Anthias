@@ -20,6 +20,9 @@ from anthias_server.api.views.v2 import (
     ManagementSyncStateViewV2,
     NetworkIpAddressesViewV2,
     PlayerIdentityViewV2,
+    PlayerPairingCancelViewV2,
+    PlayerPairingStartViewV2,
+    PlayerPairingStatusViewV2,
     PlayerPolicyViewV2,
     PlaylistListViewV2,
     PlaylistOrderViewV2,
@@ -96,6 +99,21 @@ def get_url_patterns() -> list[URLPattern | URLResolver]:
             'v2/player/policy',
             PlayerPolicyViewV2.as_view(),
             name='player_policy_v2',
+        ),
+        path(
+            'v2/player/pairing/start',
+            PlayerPairingStartViewV2.as_view(),
+            name='player_pairing_start_v2',
+        ),
+        path(
+            'v2/player/pairing/status',
+            PlayerPairingStatusViewV2.as_view(),
+            name='player_pairing_status_v2',
+        ),
+        path(
+            'v2/player/pairing/cancel',
+            PlayerPairingCancelViewV2.as_view(),
+            name='player_pairing_cancel_v2',
         ),
         path(
             'v2/playlists',

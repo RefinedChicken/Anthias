@@ -19,6 +19,7 @@ class FleetPairingAdmin(admin.ModelAdmin[FleetPairing]):
     list_display = (
         'fleet_base_url',
         'status',
+        'pairing_user_code',
         'content_authority',
         'playlist_authority',
         'schedule_authority',
@@ -26,11 +27,12 @@ class FleetPairingAdmin(admin.ModelAdmin[FleetPairing]):
         'paired_at',
         'unpaired_at',
     )
-    # device_credential is deliberately excluded from list_display —
-    # a bearer credential, not operator-facing summary data, even in
-    # the admin.
+    # device_credential/pairing_device_code are deliberately excluded
+    # from list_display — bearer secrets, not operator-facing summary
+    # data, even in the admin.
     readonly_fields = (
         'device_credential',
+        'pairing_device_code',
         'created_at',
         'updated_at',
     )
